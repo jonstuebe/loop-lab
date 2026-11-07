@@ -5,6 +5,9 @@ import {
   EYE_HEIGHT, GRAVITY, HOLD_DISTANCE, isTouch, JUMP_SPEED, KILL_Y, MAX_FALL_SPEED, QUALITY, type PortalIndex,
   type QualityName, WALK_SPEED, loadQuality, saveQuality,
 } from './config';
+import { dateForDay, dayNumber, formatCountdown, formatDay, formatTime, msUntilNextDay } from './daily/calendar';
+import { chamberName, dailyChamber } from './daily/generator';
+import { currentStreak, loadProgress, type Progress, recordClear } from './daily/progress';
 import { Input } from './input';
 import { type Body, overlaps, physicsStep, rayBox } from './physics';
 import { PortalSystem } from './portals';
@@ -15,11 +18,14 @@ import { createStage, type Stage } from './render/stage';
 import { createTextures, type GameTextures } from './render/textures';
 import { Hud } from './ui/hud';
 import { type CardSpec, Overlay } from './ui/overlay';
-import { LEVELS } from './world/levels';
+import { type LevelDef, LEVELS } from './world/levels';
 import { animateCube, ButtonProp, CUBE_SIZE, createCubeMesh, GoalProp, type Spring, springStep } from './world/props';
 import { type Block, type Collider, type Surface, World } from './world/world';
 
-type GameState = 'start' | 'play' | 'done' | 'settings';
+type GameState = 'menu' | 'play' | 'done' | 'settings';
+
+/** What is being played: a daily chamber, or one of the hand-made training chambers. */
+type Session = { kind: 'daily'; day: number } | { kind: 'training'; index: number };
 
 interface Cube extends Body {
   held: boolean;
@@ -72,8 +78,15 @@ export class Game {
   private door: Door | null = null;
   private goal: { pos: Vector3; prop: GoalProp } | null = null;
 
-  private levelIndex = 0;
-  private state: GameState = 'start';
+  private session: Session = { kind: 'daily', day: 1 };
+  private level: LevelDef = LEVELS[0];
+  /** Seconds spent playing the current chamber, across restarts. */
+  private runTime = 0;
+  private portalsFired = 0;
+  /** True once the player has entered the current chamber (so the menu can offer to resume it). */
+  private started = false;
+  private readonly progress: Progress = loadProgress();
+  private state: GameState = 'menu';
   private settingsReturn: { state: GameState; card: CardSpec | null } | null = null;
 
   private quality: QualityName;
@@ -110,8 +123,9 @@ export class Game {
       shoot: (i) => this.shoot(i),
       jump: () => { this.jumpBuffer = JUMP_BUFFER; },
       grab: () => this.toggleGrab(),
-      restart: () => this.loadLevel(this.levelIndex),
+      restart: () => this.loadLevel(this.level),
       openSettings: () => this.openSettings(),
+      openMenu: () => this.openMenu(),
     });
 
     this.quality = loadQuality();
@@ -121,18 +135,42 @@ export class Game {
 
   start(): void {
     this.applyQuality(this.quality);
-    this.loadLevel(0);
-    this.showStart();
+    this.enter({ kind: 'daily', day: dayNumber() });
+    this.started = false;
+    this.showMenu();
     requestAnimationFrame(this.frame);
+  }
+
+  /** Compiles shaders for the current scene so the first frames don't stutter. */
+  async warmup(): Promise<void> {
+    const { renderer, scene, camera } = this.stage;
+    try {
+      await renderer.compileAsync(scene, camera);
+    } catch {
+      // not fatal: shaders will compile on first use instead
+    }
   }
 
   // ---------- levels ----------
 
-  private loadLevel(index: number): void {
-    this.levelIndex = index;
+  /** Starts a fresh run of a daily or training chamber. */
+  private enter(session: Session): void {
+    this.session = session;
+    this.level = session.kind === 'daily' ? dailyChamber(session.day).level : LEVELS[session.index];
+    this.runTime = 0;
+    this.portalsFired = 0;
+    this.started = true;
+    this.loadLevel(this.level);
+  }
+
+  private sessionLabel(): string {
+    const s = this.session;
+    return s.kind === 'daily' ? `Daily chamber #${s.day}` : `Training ${s.index + 1} of ${LEVELS.length}`;
+  }
+
+  private loadLevel(level: LevelDef): void {
     this.world.clear(new Set([this.cubeMesh]));
     this.effects.clear();
-    const level = LEVELS[index];
     const setup = level.build(this.world);
 
     this.portals.reset();
@@ -171,7 +209,8 @@ export class Game {
     this.goal = { pos: new Vector3(...setup.goal), prop: goal };
 
     this.fitShadowToLevel();
-    this.hud.showLevel(index, LEVELS.length, level.name, level.hint);
+    this.hud.showLevel(this.sessionLabel(), level.name, level.hint);
+    this.hud.setTime(this.session.kind === 'daily' ? this.runTime : null);
     this.updateCrosshair();
   }
 
@@ -231,6 +270,7 @@ export class Game {
     }
     const portal = this.portals.place(index, end, hit.normal, dir, hit.block, this.world.blocks);
     if (portal) {
+      this.portalsFired++;
       this.effects.impact(portal.center, portal.normal, color, 1.4);
       this.effects.portalBurst(portal.center, portal.normal, portal.up, portal.right, color);
       this.updateCrosshair();
@@ -338,7 +378,7 @@ export class Game {
         this.completeLevel();
       }
     }
-    if (player.pos.y < KILL_Y) this.loadLevel(this.levelIndex);
+    if (player.pos.y < KILL_Y) this.loadLevel(this.level);
   }
 
   /** Keep looking the "same" way relative to the exit portal. */
@@ -406,15 +446,108 @@ export class Game {
 
   // ---------- screens ----------
 
-  private showStart(): void {
-    this.state = 'start';
+  /** Starts (or resumes) play with the overlay hidden. */
+  private play(session?: Session): void {
+    if (session) this.enter(session);
+    this.overlay.hide();
+    this.resumePlay();
+  }
+
+  private openMenu(): void {
+    if (this.state === 'menu' || this.state === 'settings') return;
+    this.input.release();
+    this.showMenu();
+  }
+
+  /** The title screen: today's chamber, streak, and links to past chambers and training. */
+  private showMenu(): void {
+    const today = dayNumber();
+    const rec = this.progress[today];
+    const cleared = Object.keys(this.progress).length;
+    const streak = currentStreak(this.progress, today);
+    const s = this.session;
+    const onToday = s.kind === 'daily' && s.day === today;
+    const midRun = this.started;
+    this.state = 'menu';
+    const status = rec
+      ? `<span class="ok">✓ Cleared in ${formatTime(rec.time)}</span> · ${plural(rec.portals, 'portal')}`
+      : 'Not cleared yet';
+    const next = rec ? `<div class="tnext">Next chamber in ${formatCountdown(msUntilNextDay())}</div>` : '';
+    const stats = cleared > 0
+      ? `<p class="streak">${streak > 0 ? `<strong>${streak}-day streak</strong> · ` : ''}${cleared} of ${today} chambers cleared</p>`
+      : '';
+
+    const actions = [
+      { label: 'Past chambers', onClick: () => this.showArchive() },
+      { label: 'Training', onClick: () => this.showTraining() },
+    ];
+    if (midRun && !onToday) actions.unshift({ label: 'Today’s chamber', onClick: () => this.play({ kind: 'daily', day: today }) });
+
     this.overlay.showCard({
       html: `<h1><span class="ring"></span><span class="ring o"></span> Loop Lab</h1>
-        <p>Two linked portals, three test chambers. Reach the glowing green exit in each one.</p>
-        <p><strong>Portals only stick to cream panels.</strong> Blue metal won’t take them. Whatever goes in one comes out the other, keeping its speed.</p>
-        ${controlsHtml()}`,
-      label: 'Enter chamber 1',
-      onGo: () => this.resumePlay(),
+        <p>A new test chamber every day. Fire two linked portals and reach the glowing green exit.</p>
+        <div class="today">
+          <div class="eyebrow">Today · ${formatDay(today)}</div>
+          <div class="tname"><span class="tnum">#${today}</span> ${chamberName(today)}</div>
+          <div class="tmeta">${status}</div>${next}
+        </div>
+        ${stats}
+        <details class="howto"${cleared === 0 ? ' open' : ''}><summary>How to play</summary>
+          <p><strong>Portals only stick to cream panels.</strong> Blue metal won’t take them. Whatever goes in one comes out the other, keeping its speed.</p>
+          ${controlsHtml()}
+        </details>`,
+      label: midRun ? (onToday ? 'Resume today’s chamber' : `Resume ${this.level.name}`) : rec ? 'Play today’s chamber again' : 'Play today’s chamber',
+      onGo: () => (midRun ? this.resumePlay() : this.play({ kind: 'daily', day: today })),
+      actions,
+    });
+  }
+
+  /** Every daily chamber so far, newest first. */
+  private showArchive(): void {
+    this.state = 'menu';
+    const today = dayNumber();
+    const rows: string[] = [];
+    for (let d = today; d >= 1; d--) {
+      const rec = this.progress[d];
+      const when = d === today ? 'Today' : formatDay(d, 'short');
+      const stat = rec ? `<span class="ok">✓ ${formatTime(rec.time)}</span>` : '<span class="dim">Play</span>';
+      rows.push(`<button class="day${rec ? ' done' : ''}" data-day="${d}">
+        <span class="dnum">#${d}</span><span class="dname">${chamberName(d)}<small>${when}</small></span>${stat}</button>`);
+    }
+    const cleared = Object.keys(this.progress).length;
+    this.overlay.showCard({
+      html: `<h2>Past chambers</h2>
+        <p>Every day has its own chamber. Play any you missed, or beat your best time.</p>
+        <p class="streak">${cleared} of ${today} cleared since ${dateForDay(1).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}</p>
+        <div class="days">${rows.join('')}</div>`,
+      label: 'Back',
+      onGo: () => this.showMenu(),
+      onMount: (card) => {
+        card.querySelector('.days')?.addEventListener('click', (e) => {
+          const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-day]');
+          if (b) this.play({ kind: 'daily', day: Number(b.dataset.day) });
+        });
+      },
+    });
+  }
+
+  /** The original hand-made chambers, which introduce each mechanic. */
+  private showTraining(): void {
+    this.state = 'menu';
+    const rows = LEVELS.map((l, i) => `<button class="day" data-train="${i}">
+      <span class="dnum">${i + 1}</span><span class="dname">${l.name}<small>${TRAINING_BLURBS[i] ?? ''}</small></span></button>`);
+    this.overlay.showCard({
+      html: `<h2>Training</h2>
+        <p>${LEVELS.length} hand-built chambers that introduce the tricks the daily chambers use. A good place to start.</p>
+        <div class="days">${rows.join('')}</div>`,
+      label: 'Back',
+      onGo: () => this.showMenu(),
+      onMount: (card) => {
+        card.querySelector('.days')?.addEventListener('click', (e) => {
+          const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-train]');
+          if (b) this.play({ kind: 'training', index: Number(b.dataset.train) });
+        });
+      },
     });
   }
 
@@ -426,21 +559,74 @@ export class Game {
 
   private completeLevel(): void {
     this.state = 'done';
+    this.started = false;
     this.input.release();
-    const index = this.levelIndex;
+    const s = this.session;
+    if (s.kind === 'daily') {
+      this.completeDaily(s.day);
+      return;
+    }
+    const index = s.index;
     if (index === LEVELS.length - 1) {
       this.overlay.showCard({
-        html: `<h1>All chambers cleared!</h1><p>You thought with portals through all ${LEVELS.length} chambers, including the fling. Nicely done.</p>`,
-        label: 'Play again from chamber 1',
-        onGo: () => { this.loadLevel(0); this.resumePlay(); },
+        html: `<h1>Training complete!</h1><p>You’ve cleared all ${LEVELS.length} training chambers. You’re ready for the daily chambers.</p>`,
+        label: 'Play today’s chamber',
+        onGo: () => this.play({ kind: 'daily', day: dayNumber() }),
+        actions: [{ label: 'Main menu', onClick: () => this.showMenu() }],
       });
     } else {
       this.overlay.showCard({
-        html: `<h1>${LEVELS[index].name} cleared!</h1><p>Next up is chamber ${index + 2}: ${LEVELS[index + 1].name}.</p>`,
-        label: `Enter chamber ${index + 2}`,
-        onGo: () => { this.loadLevel(index + 1); this.resumePlay(); },
+        html: `<h1>${LEVELS[index].name} cleared!</h1><p>Next up is training chamber ${index + 2}: ${LEVELS[index + 1].name}.</p>`,
+        label: `Enter training chamber ${index + 2}`,
+        onGo: () => this.play({ kind: 'training', index: index + 1 }),
+        actions: [{ label: 'Main menu', onClick: () => this.showMenu() }],
       });
     }
+  }
+
+  private completeDaily(day: number): void {
+    const today = dayNumber();
+    const before = this.progress[day];
+    const time = this.runTime;
+    const portals = this.portalsFired;
+    recordClear(this.progress, day, time, portals, day === today);
+    const best = before && time < before.time ? '<p class="best">New best time!</p>' : '';
+    const streak = currentStreak(this.progress, today);
+    const isToday = day === today;
+    const share = `Loop Lab #${day} — ${this.level.name}\n⏱ ${formatTime(time)} · ${plural(portals, 'portal')}${isToday && streak > 1 ? ` · ${streak}-day streak` : ''}`;
+    const nextUnplayed = this.nextUnplayed(day);
+
+    const actions = [
+      {
+        label: 'Share result',
+        onClick: (b: HTMLButtonElement) => {
+          void shareText(share).then((how) => {
+            if (how) b.textContent = how === 'copied' ? 'Copied to clipboard!' : 'Shared!';
+          });
+        },
+      },
+      { label: 'Main menu', onClick: () => this.showMenu() },
+    ];
+    this.overlay.showCard({
+      html: `<div class="eyebrow">Daily chamber #${day} · ${isToday ? 'Today' : formatDay(day, 'short')}</div>
+        <h1>${this.level.name} cleared!</h1>
+        ${best}
+        <div class="stats">
+          <div><b>${formatTime(time)}</b><span>time</span></div>
+          <div><b>${portals}</b><span>${portals === 1 ? 'portal' : 'portals'}</span></div>
+          <div><b>${streak}</b><span>day streak</span></div>
+        </div>
+        ${isToday ? `<p>A new chamber unlocks in ${formatCountdown(msUntilNextDay())}.</p>` : ''}`,
+      label: nextUnplayed ? `Play #${nextUnplayed}: ${chamberName(nextUnplayed)}` : 'Past chambers',
+      onGo: () => (nextUnplayed ? this.play({ kind: 'daily', day: nextUnplayed }) : this.showArchive()),
+      actions,
+    });
+  }
+
+  /** The newest daily chamber not cleared yet (today's first), if any. */
+  private nextUnplayed(exclude: number): number | null {
+    for (let d = dayNumber(); d >= 1; d--) if (d !== exclude && !this.progress[d]) return d;
+    return null;
   }
 
   private openSettings(): void {
@@ -547,6 +733,10 @@ export class Game {
     if (this.state === 'play') {
       const steps = dt > 0.012 ? Math.ceil(dt / MAX_SUBSTEP) : 1;
       for (let i = 0; i < steps && this.state === 'play'; i++) this.update(dt / steps);
+      if (this.state === 'play') {
+        this.runTime += rawDt > 0.25 ? 0 : rawDt; // ignore long stalls (tab switches)
+        if (this.session.kind === 'daily') this.hud.setTime(this.runTime);
+      }
     }
 
     this.animate(dt);
@@ -627,6 +817,30 @@ export class Game {
   }
 }
 
+const TRAINING_BLURBS = [
+  'Climb with portals', 'Cubes, buttons and doors', 'Flinging with momentum', 'Crossing a bottomless chasm',
+  'Carry a cube through portals', 'Floor portals only', 'Two climbs in a row', 'Everything at once',
+];
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+/** Shares via the native share sheet where there is one, else copies to the clipboard. */
+async function shareText(text: string): Promise<'shared' | 'copied' | null> {
+  const url = location.href.split('#')[0];
+  try {
+    if (isTouch && typeof navigator.share === 'function') {
+      await navigator.share({ text, url });
+      return 'shared';
+    }
+    await navigator.clipboard.writeText(`${text}\n${url}`);
+    return 'copied';
+  } catch {
+    return null; // cancelled, or no clipboard access
+  }
+}
+
 function controlsHtml(): string {
   if (isTouch) {
     return `<dl class="keys">
@@ -634,7 +848,7 @@ function controlsHtml(): string {
       <dt>Right thumb</dt><dd>Drag on the right to look</dd>
       <dt>Blue / Orange</dt><dd>Fire a portal where the crosshair points</dd>
       <dt>Grab</dt><dd>Pick up or drop a cube</dd>
-      <dt>↺ and ⚙</dt><dd>Restart the chamber, change graphics quality</dd></dl>`;
+      <dt>↺ ⌂ ⚙</dt><dd>Restart, main menu, graphics quality</dd></dl>`;
   }
   return `<dl class="keys">
     <dt>W A S D</dt><dd>Move</dd>
@@ -643,5 +857,5 @@ function controlsHtml(): string {
     <dt>Space</dt><dd>Jump</dd>
     <dt>E</dt><dd>Pick up or drop a cube</dd>
     <dt>R</dt><dd>Restart the chamber</dd>
-    <dt>⚙ button</dt><dd>Change graphics quality</dd></dl>`;
+    <dt>⌂ and ⚙</dt><dd>Main menu, change graphics quality</dd></dl>`;
 }

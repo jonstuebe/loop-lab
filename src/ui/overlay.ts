@@ -1,10 +1,20 @@
 import { QUALITY, QUALITY_ORDER, type QualityName } from '../config';
 import { $ } from './dom';
 
+export interface CardAction {
+  label: string;
+  onClick: (button: HTMLButtonElement) => void;
+}
+
 export interface CardSpec {
   html: string;
+  /** Main call-to-action: hides the overlay, then runs `onGo`. */
   label: string;
   onGo: () => void;
+  /** Secondary buttons shown under the main one. They don't hide the overlay by themselves. */
+  actions?: CardAction[];
+  /** Called after the card is rendered, e.g. to wire up buttons inside `html`. */
+  onMount?: (card: HTMLElement) => void;
 }
 
 export interface SettingsSpec {
@@ -26,13 +36,22 @@ export class Overlay {
     this.current = spec;
     this.fpsEl = null;
     this.root.classList.remove('peek');
-    this.card.innerHTML = `${spec.html}<button class="cta" id="go">${spec.label}</button>`;
+    const actions = spec.actions?.length
+      ? `<div class="actions">${spec.actions.map((a, i) => `<button class="cta alt" data-action="${i}">${a.label}</button>`).join('')}</div>`
+      : '';
+    this.card.innerHTML = `${spec.html}<button class="cta" id="go">${spec.label}</button>${actions}`;
+    this.card.scrollTop = 0;
     this.root.classList.remove('hidden');
     const go = $('go');
     go.addEventListener('click', () => {
       this.hide();
       spec.onGo();
     });
+    this.card.querySelectorAll<HTMLButtonElement>('[data-action]').forEach((b) => {
+      const action = spec.actions?.[Number(b.dataset.action)];
+      if (action) b.addEventListener('click', () => action.onClick(b));
+    });
+    spec.onMount?.(this.card);
     go.focus({ preventScroll: true });
   }
 

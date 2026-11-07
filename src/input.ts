@@ -10,6 +10,7 @@ export interface InputActions {
   grab(): void;
   restart(): void;
   openSettings(): void;
+  openMenu(): void;
 }
 
 const MOUSE_LOCKED_SENS = 0.0022;
@@ -247,6 +248,11 @@ export class Input {
       e.stopPropagation();
       if (this.actions.isPlaying()) this.actions.restart();
       (e.currentTarget as HTMLElement).blur();
+    });
+    $('menuBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      (e.currentTarget as HTMLElement).blur();
+      this.actions.openMenu();
     });
     $('gearBtn').addEventListener('click', (e) => {
       e.stopPropagation();
