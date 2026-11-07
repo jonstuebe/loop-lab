@@ -538,7 +538,7 @@ export class Game {
       <span class="dnum">${i + 1}</span><span class="dname">${l.name}<small>${TRAINING_BLURBS[i] ?? ''}</small></span></button>`);
     this.overlay.showCard({
       html: `<h2>Training</h2>
-        <p>Three hand-built chambers that introduce the tricks the daily chambers use. A good place to start.</p>
+        <p>${LEVELS.length} hand-built chambers that introduce the tricks the daily chambers use. A good place to start.</p>
         <div class="days">${rows.join('')}</div>`,
       label: 'Back',
       onGo: () => this.showMenu(),
@@ -569,7 +569,7 @@ export class Game {
     const index = s.index;
     if (index === LEVELS.length - 1) {
       this.overlay.showCard({
-        html: `<h1>Training complete!</h1><p>You’ve cleared all ${LEVELS.length} training chambers, including the fling. You’re ready for the daily chambers.</p>`,
+        html: `<h1>Training complete!</h1><p>You’ve cleared all ${LEVELS.length} training chambers. You’re ready for the daily chambers.</p>`,
         label: 'Play today’s chamber',
         onGo: () => this.play({ kind: 'daily', day: dayNumber() }),
         actions: [{ label: 'Main menu', onClick: () => this.showMenu() }],
@@ -817,7 +817,10 @@ export class Game {
   }
 }
 
-const TRAINING_BLURBS = ['Climb with portals', 'Cubes, buttons and doors', 'Flinging with momentum'];
+const TRAINING_BLURBS = [
+  'Climb with portals', 'Cubes, buttons and doors', 'Flinging with momentum', 'Crossing a bottomless chasm',
+  'Carry a cube through portals', 'Floor portals only', 'Two climbs in a row', 'Everything at once',
+];
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;

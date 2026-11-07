@@ -4,7 +4,7 @@ A small first-person portal puzzle game built with [three.js](https://threejs.or
 
 Fire two linked portals onto the cream panels and use them to reach the glowing green exit. Whatever goes into one portal comes out of the other, keeping its speed.
 
-There's a **new chamber every day**, the same for everyone. Past days stay playable from the *Past chambers* list, and three hand-built *Training* chambers introduce the mechanics. Clear times, portal counts and your streak are saved in `localStorage`.
+There's a **new chamber every day**, the same for everyone. Past days stay playable from the *Past chambers* list, and eight hand-built *Training* chambers introduce the mechanics. Clear times, portal counts and your streak are saved in `localStorage`.
 
 ## Getting started
 
