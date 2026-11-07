@@ -1,4 +1,5 @@
 import { isTouch } from '../config';
+import { formatTime } from '../daily/calendar';
 import { $ } from './dom';
 
 const TOAST_SECONDS = 1.6;
@@ -13,6 +14,8 @@ export class Hud {
   private readonly crossBlue = document.getElementById('xhB') as SVGPathElement | null;
   private readonly crossOrange = document.getElementById('xhO') as SVGPathElement | null;
   private toastTimer = 0;
+  private label = '';
+  private shownSeconds = -1;
 
   constructor() {
     const toggle = () => this.chip.classList.toggle('collapsed');
@@ -27,11 +30,22 @@ export class Hud {
     if (tap) tap.textContent = isTouch ? 'Tap to hide' : 'Click to hide';
   }
 
-  showLevel(index: number, total: number, name: string, hint: string): void {
-    this.levelNum.textContent = `Chamber ${index + 1} of ${total}`;
+  /** Shows a chamber's label (e.g. "Daily #7"), name and hint in the info chip. */
+  showLevel(label: string, name: string, hint: string): void {
+    this.label = label;
+    this.shownSeconds = -1;
+    this.levelNum.textContent = label;
     this.levelName.textContent = name;
     this.hint.textContent = hint;
     this.chip.classList.remove('collapsed');
+  }
+
+  /** Shows the run time next to the chamber label; null hides it. */
+  setTime(seconds: number | null): void {
+    const whole = seconds === null ? -1 : Math.floor(seconds);
+    if (whole === this.shownSeconds) return;
+    this.shownSeconds = whole;
+    this.levelNum.textContent = seconds === null ? this.label : `${this.label} · ${formatTime(seconds)}`;
   }
 
   setCrosshair(bluePlaced: boolean, orangePlaced: boolean): void {

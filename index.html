@@ -7,8 +7,67 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <meta name="theme-color" content="#fbefe2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1e1a2c" media="(prefers-color-scheme: dark)">
+  <!-- Preloader styles are inline so it paints before any script or stylesheet arrives. -->
+  <style>
+    html,body{margin:0;height:100%;background:#fbefe2}
+    #preloader{--pl-bg:#fbefe2;--pl-ink:#2c2442;--pl-muted:#6d6483;--pl-track:rgba(44,36,66,.12);
+      position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;
+      background:radial-gradient(120% 90% at 50% 40%,#fff8ef 0%,var(--pl-bg) 60%);color:var(--pl-ink);
+      font-family:"Fredoka","Nunito",ui-rounded,"Arial Rounded MT Bold",system-ui,sans-serif;
+      transition:opacity .5s ease,visibility .5s;user-select:none;-webkit-user-select:none}
+    @media (prefers-color-scheme: dark){
+      html,body{background:#1e1a2c}
+      #preloader{--pl-bg:#1e1a2c;--pl-ink:#fbf3e8;--pl-muted:#b8afca;--pl-track:rgba(251,243,232,.14);
+        background:radial-gradient(120% 90% at 50% 40%,#2a2440 0%,var(--pl-bg) 60%)}
+    }
+    #preloader.gone{opacity:0;visibility:hidden;pointer-events:none}
+    .pl-box{display:flex;flex-direction:column;align-items:center;gap:22px;width:min(320px,100%)}
+    .pl-scene{position:relative;width:240px;height:84px}
+    .pl-portal{position:absolute;top:6px;width:26px;height:72px;border-radius:50%;box-sizing:border-box}
+    .pl-portal::after{content:"";position:absolute;inset:-7px;border-radius:50%;opacity:.45;filter:blur(8px);background:currentColor;
+      animation:pl-glow 1.6s ease-in-out infinite}
+    .pl-portal.b{left:78px;color:#3aa0ff;border:5px solid #3aa0ff;background:rgba(58,160,255,.18)}
+    .pl-portal.o{left:136px;color:#ff8c2a;border:5px solid #ff8c2a;background:rgba(255,140,42,.18)}
+    .pl-portal.o::after{animation-delay:.8s}
+    .pl-lane{position:absolute;top:0;height:84px;overflow:hidden}
+    .pl-lane.in{left:0;width:91px}
+    .pl-lane.out{left:149px;width:91px}
+    .pl-cube{position:absolute;top:47px;width:22px;height:22px;border-radius:6px;background:#b8c4d6;
+      box-shadow:inset 0 -4px 0 rgba(44,36,66,.18),0 3px 0 rgba(44,36,66,.12)}
+    .pl-cube::after{content:"";position:absolute;inset:7px;border-radius:50%;background:#ff8c2a;opacity:.85}
+    .pl-lane.in .pl-cube{animation:pl-in 1.6s cubic-bezier(.45,0,.75,.6) infinite}
+    .pl-lane.out .pl-cube{animation:pl-out 1.6s cubic-bezier(.25,.4,.55,1) infinite}
+    .pl-title{font-weight:700;font-size:40px;line-height:1;letter-spacing:.2px}
+    .pl-bar{width:100%;height:10px;border-radius:999px;background:var(--pl-track);overflow:hidden}
+    .pl-fill{height:100%;width:6%;border-radius:999px;background:linear-gradient(90deg,#3aa0ff,#ff8c2a);transition:width .45s ease}
+    .pl-status{font-size:16px;color:var(--pl-muted);min-height:1.4em;text-align:center}
+    .pl-status.err{color:var(--pl-ink)}
+    @keyframes pl-in{0%{transform:translateX(-30px) rotate(0)}48%{transform:translateX(96px) rotate(180deg)}100%{transform:translateX(96px) rotate(180deg)}}
+    @keyframes pl-out{0%,50%{transform:translateX(-26px) rotate(0)}100%{transform:translateX(100px) rotate(180deg)}}
+    @keyframes pl-glow{0%,100%{opacity:.25;transform:scale(.92)}50%{opacity:.6;transform:scale(1.06)}}
+    @media (prefers-reduced-motion: reduce){
+      .pl-cube,.pl-portal::after{animation:none!important}
+      .pl-lane.out .pl-cube{transform:translateX(30px)}
+      .pl-lane.in .pl-cube{transform:translateX(20px)}
+    }
+  </style>
 </head>
 <body>
+  <div id="preloader" role="status" aria-live="polite">
+    <div class="pl-box">
+      <div class="pl-scene" aria-hidden="true">
+        <div class="pl-lane in"><div class="pl-cube"></div></div>
+        <div class="pl-portal b"></div>
+        <div class="pl-portal o"></div>
+        <div class="pl-lane out"><div class="pl-cube"></div></div>
+      </div>
+      <div class="pl-title">Loop Lab</div>
+      <div class="pl-bar"><div class="pl-fill" id="plFill"></div></div>
+      <div class="pl-status" id="plStatus">Loading the lab…</div>
+    </div>
+  </div>
   <canvas id="c"></canvas>
 
   <div class="chip" id="chip" role="button" tabindex="0" aria-label="Chamber info">
@@ -19,6 +78,9 @@
   </div>
   <button class="iconbtn" id="gearBtn" aria-label="Graphics settings" title="Graphics settings">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+  <button class="iconbtn" id="menuBtn" aria-label="Main menu" title="Main menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 11 12 4l8.5 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5.5h4V20"/></svg>
   </button>
   <button class="iconbtn" id="resetBtn" aria-label="Restart chamber" title="Restart chamber (R)">↺</button>
 

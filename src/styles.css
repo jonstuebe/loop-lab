@@ -15,6 +15,7 @@
   padding-bottom:env(safe-area-inset-bottom,0px);
 }
 @media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .ok,:root:not([data-theme="light"]) .card p.best{color:#5bd68e}
   :root:not([data-theme="light"]){
     --surface:#1e1a2c;
     --panel:rgba(38,33,56,.93);
@@ -45,7 +46,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 #c{position:fixed;inset:0;width:100%;height:100%;display:block}
 
 .chip{position:fixed;left:calc(12px + env(safe-area-inset-left,0px));top:calc(12px + env(safe-area-inset-top,0px));
-  max-width:min(420px,calc(100vw - 140px));background:var(--panel);color:var(--ink);border:2px solid var(--line);
+  max-width:min(420px,calc(100vw - 196px));background:var(--panel);color:var(--ink);border:2px solid var(--line);
   border-radius:20px;padding:10px 16px 12px;cursor:pointer;box-shadow:0 6px 0 rgba(44,36,66,.12)}
 .chip .num{font-weight:500;font-size:13px;color:var(--muted)}
 .chip .name{font-weight:700;font-size:22px;line-height:1.1;margin:1px 0 4px}
@@ -60,8 +61,9 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 .iconbtn:active{transform:translateY(2px);box-shadow:0 2px 0 rgba(44,36,66,.12)}
 #resetBtn{right:calc(12px + env(safe-area-inset-right,0px))}
 #gearBtn{right:calc(68px + env(safe-area-inset-right,0px))}
-#gearBtn svg{width:24px;height:24px}
-.iconbtn:focus-visible,.cta:focus-visible,.seg button:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+#menuBtn{right:calc(124px + env(safe-area-inset-right,0px))}
+#gearBtn svg,#menuBtn svg{width:24px;height:24px}
+.iconbtn:focus-visible,.cta:focus-visible,.seg button:focus-visible,.day:focus-visible,.howto summary:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 
 #xhair{position:fixed;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;pointer-events:none}
 #xhair path{fill:none;stroke-width:4;stroke-linecap:round;opacity:.3;transition:opacity .15s}
@@ -112,5 +114,31 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 .qrow p{margin:6px 0}
 .fps{font-weight:600;color:var(--ink) !important;white-space:nowrap;font-variant-numeric:tabular-nums}
 .qnote{font-size:15px !important}
+.cta.alt{margin-top:0;background:var(--seg);color:var(--ink);box-shadow:0 4px 0 var(--line);font-size:17px;padding:13px 14px}
+.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:12px}
+.eyebrow{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.today{margin:16px 0 6px;padding:14px 16px;border-radius:20px;background:var(--seg);border:2px solid var(--line)}
+.tname{font-size:24px;font-weight:700;line-height:1.15}
+.tnum{color:var(--muted);font-weight:600}
+.tmeta{font-size:16px;color:var(--muted);margin-top:4px}
+.tnext{font-size:14px;color:var(--muted);margin-top:2px}
+.ok{color:#1f9d55;font-weight:600}
+.dim{color:var(--muted)}
+.card p.streak{font-size:15px;margin:8px 2px}
+.card p.best{color:#1f9d55;font-weight:600;margin-top:0}
+.howto{margin-top:10px;border-top:2px solid var(--line);padding-top:8px}
+.howto summary{cursor:pointer;font-weight:600;font-size:17px;padding:4px 0;border-radius:8px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 4px}
+.stats div{background:var(--seg);border-radius:16px;padding:12px 8px;text-align:center}
+.stats b{display:block;font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+.stats span{font-size:13px;color:var(--muted)}
+.days{display:flex;flex-direction:column;gap:6px;margin-top:12px;max-height:min(46vh,420px);overflow:auto;padding:2px}
+.day{display:flex;align-items:center;gap:12px;width:100%;text-align:left;font-family:inherit;color:var(--ink);background:var(--seg);
+  border:2px solid transparent;border-radius:16px;padding:10px 14px;cursor:pointer;font-size:16px}
+.day:hover{border-color:var(--line)}
+.day .dnum{font-weight:700;color:var(--muted);min-width:2.6em;font-variant-numeric:tabular-nums}
+.day .dname{flex:1;font-weight:600;display:flex;flex-direction:column;line-height:1.2}
+.day .dname small{font-weight:400;font-size:13px;color:var(--muted)}
+.day.done{opacity:.85}
 @media (max-height:520px){ .card h1{font-size:34px} .card{padding:18px} .card p{font-size:15.5px;margin:6px 0} }
 @media (prefers-reduced-motion: reduce){ #toast,#xhair path{transition:none} }
