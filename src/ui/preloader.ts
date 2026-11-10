@@ -1,38 +1,55 @@
-/**
- * Drives the loading screen that index.html paints before any script runs.
- * Each step updates the status line and progress bar; finish() fades it out.
- */
-export class Preloader {
-  private readonly root = document.getElementById('preloader');
-  private readonly fill = document.getElementById('plFill');
-  private readonly status = document.getElementById('plStatus');
+import { $ } from './dom';
 
-  /** Shows a status message and moves the bar to `progress` (0–1). Resolves once it's painted. */
-  async step(message: string, progress: number): Promise<void> {
-    if (this.status) this.status.textContent = message;
-    if (this.fill) this.fill.style.width = `${Math.round(Math.max(0.06, Math.min(1, progress)) * 100)}%`;
+/**
+ * Resolves once the browser has had a chance to paint. Falls back to a timer
+ * so loading still finishes in a background tab, where frames don't fire.
+ */
+export function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    const fallback = setTimeout(resolve, 120);
+    requestAnimationFrame(() => {
+      clearTimeout(fallback);
+      setTimeout(resolve, 0);
+    });
+  });
+}
+
+/** The full-screen loading bar shown while the game draws its textures and builds the first chamber. */
+export class Preloader {
+  private readonly root = $('preloader');
+  private readonly bar = $('preBar');
+  private readonly label = $('preLabel');
+  private readonly percent = $('prePct');
+  private completed = 0;
+
+  constructor(private readonly total: number) {}
+
+  /** Names the stage about to run and lets the screen repaint before it blocks. */
+  async begin(label: string): Promise<void> {
+    this.label.textContent = label;
+    this.show(this.completed / this.total);
+    this.completed++;
     await nextPaint();
   }
 
-  finish(): void {
-    const root = this.root;
-    if (!root) return;
-    if (this.fill) this.fill.style.width = '100%';
-    root.classList.add('gone');
-    root.addEventListener('transitionend', () => root.remove(), { once: true });
-    setTimeout(() => root.remove(), 1000);
+  /** Fills the bar, fades the screen out and removes it. */
+  async finish(): Promise<void> {
+    this.label.textContent = 'Ready';
+    this.show(1);
+    await nextPaint();
+    this.root.classList.add('done');
+    setTimeout(() => this.root.remove(), 600);
   }
 
-  fail(message: string): void {
-    if (this.status) {
-      this.status.textContent = message;
-      this.status.classList.add('err');
-    }
-    this.fill?.parentElement?.remove();
+  fail(): void {
+    this.root.classList.add('failed');
+    this.label.textContent = 'Could not start. Reload to try again';
   }
-}
 
-/** Resolves after the browser has had a chance to paint (two animation frames). */
-export function nextPaint(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  private show(fraction: number): void {
+    const pct = Math.round(fraction * 100);
+    this.bar.style.transform = `scaleX(${fraction})`;
+    this.percent.textContent = `${pct}%`;
+    this.root.setAttribute('aria-valuenow', String(pct));
+  }
 }

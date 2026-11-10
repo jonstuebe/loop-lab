@@ -11,7 +11,7 @@ const SIZE = isTouch ? 512 : 1024;
 
 type Draw = (g: CanvasRenderingContext2D) => void;
 
-function canvas2d(size: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
+export function canvas2d(size: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
   const g = canvas.getContext('2d', { willReadFrequently: true });
@@ -36,14 +36,14 @@ function toTexture(canvas: HTMLCanvasElement, srgb: boolean): CanvasTexture {
 // ---------- pixel helpers ----------
 
 /** Cheap deterministic hash noise in 0..1. */
-function hash(x: number, y: number, seed: number): number {
+export function hash(x: number, y: number, seed: number): number {
   let h = (x * 374761393 + y * 668265263 + seed * 2147483647) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
 }
 
 /** Smooth value noise that tiles every `period` pixels. */
-function valueNoise(x: number, y: number, period: number, cells: number, seed: number): number {
+export function valueNoise(x: number, y: number, period: number, cells: number, seed: number): number {
   const fx = (x / period) * cells;
   const fy = (y / period) * cells;
   const x0 = Math.floor(fx);
@@ -223,12 +223,12 @@ function addGrain(canvas: HTMLCanvasElement, mottle: number, grain: number, seed
 
 // ---------- drawing primitives ----------
 
-function roundRect(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+export function roundRect(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
   g.beginPath();
   g.roundRect(x, y, w, h, r);
 }
 
-function circle(g: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string): void {
+export function circle(g: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string): void {
   g.fillStyle = fill;
   g.beginPath();
   g.arc(x, y, r, 0, Math.PI * 2);
@@ -281,23 +281,143 @@ function drawTile(g: CanvasRenderingContext2D, t: TileStyle): void {
   g.restore();
 }
 
-function grayCanvas(fn: Draw): HTMLCanvasElement {
-  return draw(fn);
+
+/** Small deterministic PRNG so wear and scratches are identical on every load. */
+export function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
-/** Roughness map: grout and tile face values, with noise-driven variation on the face. */
-function roughnessFor(t: { inset: number; radius: number }, face: number, grout: number, seed: number, extra?: Draw): HTMLCanvasElement {
-  const canvas = grayCanvas((g) => {
-    const v = (n: number) => `rgb(${n * 255},${n * 255},${n * 255})`;
-    g.fillStyle = v(grout);
-    g.fillRect(0, 0, DESIGN, DESIGN);
-    roundRect(g, t.inset, t.inset, DESIGN - t.inset * 2, DESIGN - t.inset * 2, t.radius);
-    g.fillStyle = v(face);
-    g.fill();
-    extra?.(g);
-  });
-  addGrain(canvas, 0.35, 0.08, seed);
+const gray = (n: number) => `rgb(${n * 255},${n * 255},${n * 255})`;
+
+/** A grayscale canvas with mottling, used for roughness and metalness channels. */
+function grayCanvas(fn: Draw, mottle = 0, seed = 1): HTMLCanvasElement {
+  const canvas = draw(fn);
+  if (mottle > 0) addGrain(canvas, mottle, 0.06, seed);
   return canvas;
+}
+
+/**
+ * Cavity occlusion from a height field: places lower than their blurred
+ * surroundings (seams, recesses, the foot of a bolt) come out darker.
+ */
+function cavityAO(h: Float32Array, radius: number, strength: number): Float32Array {
+  const soft = h.slice();
+  blur(soft, SIZE, Math.max(1, Math.round((radius * SIZE) / DESIGN / 1.7)));
+  const ao = new Float32Array(h.length);
+  for (let i = 0; i < h.length; i++) ao[i] = 1 - Math.min(0.75, Math.max(0, (soft[i] - h[i]) * strength));
+  return ao;
+}
+
+/** Packs occlusion (R), roughness (G) and metalness (B) into one texture, as three.js expects. */
+function packORM(ao: Float32Array | null, rough: HTMLCanvasElement, metal: HTMLCanvasElement | number): HTMLCanvasElement {
+  const [canvas, g] = canvas2d(SIZE);
+  const img = g.createImageData(SIZE, SIZE);
+  const d = img.data;
+  const r = readGray(rough);
+  const m = typeof metal === 'number' ? null : readGray(metal);
+  const mConst = typeof metal === 'number' ? metal * 255 : 0;
+  for (let i = 0; i < r.length; i++) {
+    const o = i * 4;
+    d[o] = ao ? ao[i] * 255 : 255;
+    d[o + 1] = r[i] * 255;
+    d[o + 2] = m ? m[i] * 255 : mConst;
+    d[o + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return canvas;
+}
+
+/** Darkens an albedo canvas by an occlusion field, so seams read even in flat light. */
+function bakeOcclusion(canvas: HTMLCanvasElement, ao: Float32Array, amount: number): void {
+  const g = canvas.getContext('2d', { willReadFrequently: true })!;
+  const img = g.getImageData(0, 0, SIZE, SIZE);
+  const d = img.data;
+  for (let i = 0; i < ao.length; i++) {
+    const f = 1 - (1 - ao[i]) * amount;
+    const o = i * 4;
+    d[o] *= f;
+    d[o + 1] *= f;
+    d[o + 2] *= f;
+  }
+  g.putImageData(img, 0, 0);
+}
+
+/** Fine random scratches: short, mostly straight, a few long ones. */
+function scratches(g: CanvasRenderingContext2D, count: number, color: string, alpha: number, seed: number, maxLen = 60): void {
+  const r = rng(seed);
+  g.save();
+  g.strokeStyle = color;
+  g.lineCap = 'round';
+  for (let i = 0; i < count; i++) {
+    const x = r() * DESIGN;
+    const y = r() * DESIGN;
+    const a = r() * Math.PI * 2;
+    const len = (r() < 0.15 ? maxLen : maxLen * 0.3) * (0.3 + r());
+    g.globalAlpha = alpha * (0.3 + r() * 0.7);
+    g.lineWidth = 0.25 + r() * 0.5;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(
+      x + Math.cos(a) * len * 0.5 + (r() - 0.5) * 4, y + Math.sin(a) * len * 0.5 + (r() - 0.5) * 4,
+      x + Math.cos(a) * len, y + Math.sin(a) * len,
+    );
+    g.stroke();
+  }
+  g.restore();
+}
+
+/** Soft blotches: fingerprints, mop marks, faded stains. */
+function smudges(g: CanvasRenderingContext2D, count: number, color: string, alpha: number, seed: number): void {
+  const r = rng(seed);
+  g.save();
+  for (let i = 0; i < count; i++) {
+    const x = r() * DESIGN;
+    const y = r() * DESIGN;
+    const rad = 10 + r() * 45;
+    const grd = g.createRadialGradient(x, y, 0, x, y, rad);
+    grd.addColorStop(0, color);
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    g.globalAlpha = alpha * (0.4 + r() * 0.6);
+    g.fillStyle = grd;
+    g.save();
+    g.translate(x, y);
+    g.rotate(r() * Math.PI);
+    g.scale(1, 0.35 + r() * 0.5);
+    g.translate(-x, -y);
+    g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
+    g.restore();
+  }
+  g.restore();
+}
+
+/** Ragged chips where paint has flaked off, clustered along a rounded-rect outline. */
+function chips(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, count: number, size: number, seed: number): void {
+  const r = rng(seed);
+  for (let i = 0; i < count; i++) {
+    const side = Math.floor(r() * 4);
+    const t = r();
+    const px = side === 0 ? x + t * w : side === 1 ? x + w : side === 2 ? x + t * w : x;
+    const py = side === 0 ? y : side === 1 ? y + t * h : side === 2 ? y + h : y + t * h;
+    const s = size * (0.3 + r() * r() * 1.4);
+    g.beginPath();
+    const n = 5 + Math.floor(r() * 4);
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2;
+      const rad = s * (0.5 + r() * 0.7);
+      const cx = px + Math.cos(a) * rad * (side % 2 === 0 ? 1.8 : 0.8);
+      const cy = py + Math.sin(a) * rad * (side % 2 === 0 ? 0.8 : 1.8);
+      if (k === 0) g.moveTo(cx, cy);
+      else g.lineTo(cx, cy);
+    }
+    g.closePath();
+    g.fill();
+  }
 }
 
 // ---------- texture sets ----------
@@ -305,152 +425,507 @@ function roughnessFor(t: { inset: number; radius: number }, face: number, grout:
 export interface SurfaceMaps {
   map: Texture;
   normalMap: Texture;
+  /** Occlusion (R), roughness (G), metalness (B). */
   roughnessMap: Texture;
+  metalnessMap: Texture;
+  aoMap: Texture;
 }
 
 export interface GameTextures {
+  /** Shell of the portal device: panel seams, a trim stripe and fasteners. */
+  gun: SurfaceMaps;
   white: SurfaceMaps;
   metal: SurfaceMaps;
   door: SurfaceMaps;
   cube: SurfaceMaps;
   cubeEmissive: Texture;
+  button: ButtonMaps;
+  goal: GoalMaps;
   all: Texture[];
 }
 
-function surface(albedo: HTMLCanvasElement, normal: HTMLCanvasElement, rough: HTMLCanvasElement): SurfaceMaps {
-  return { map: toTexture(albedo, true), normalMap: toTexture(normal, false), roughnessMap: toTexture(rough, false) };
+/** Maps for the pressure plate: the fixed base ring and the moving cap. */
+export interface ButtonMaps {
+  base: SurfaceMaps;
+  baseEmissive: Texture;
+  cap: SurfaceMaps;
+  capEmissive: Texture;
 }
 
-export function createTextures(): GameTextures {
-  // Cream panels: portal-friendly, glossy ceramic.
+/** Maps for the exit pad's deck. */
+export interface GoalMaps {
+  pad: SurfaceMaps;
+  padEmissive: Texture;
+}
+
+function surface(albedo: HTMLCanvasElement, normal: HTMLCanvasElement, orm: HTMLCanvasElement): SurfaceMaps {
+  const packed = toTexture(orm, false);
+  return { map: toTexture(albedo, true), normalMap: toTexture(normal, false), roughnessMap: packed, metalnessMap: packed, aoMap: packed };
+}
+
+/** What the loading screen says while the first set of maps is drawn. */
+export const FIRST_TEXTURE_STAGE = 'Glazing ceramic panels';
+/** How many stages `textureSteps` runs through, counting the first. */
+export const TEXTURE_STAGES = 7;
+
+/**
+ * Draws the maps one surface at a time, yielding the name of the next stage
+ * between them so a loading screen can repaint.
+ */
+export function* textureSteps(): Generator<string, GameTextures> {
+  // ----- Cream panels: portal-friendly glazed ceramic, one panel per world unit.
   const whiteStyle: TileStyle = {
-    grout: '#cdb79c', top: '#fff9ef', bottom: '#f3e4cf',
-    highlight: 'rgba(255,255,255,.55)', shadow: 'rgba(130,90,50,.35)', inset: 9, radius: 30,
+    grout: '#6f685c', top: '#e4dbcc', bottom: '#dbd0bf',
+    highlight: 'rgba(255,255,255,.28)', shadow: 'rgba(60,45,25,.5)', inset: 2.2, radius: 5,
   };
-  const whiteAlbedo = draw((g) => drawTile(g, whiteStyle));
-  addGrain(whiteAlbedo, 0.05, 0.025, 11);
+  const pins = [[17, 17], [DESIGN - 17, 17], [17, DESIGN - 17], [DESIGN - 17, DESIGN - 17]] as const;
+  const whiteAlbedo = draw((g) => {
+    drawTile(g, whiteStyle);
+    g.save();
+    tileRect(g, whiteStyle);
+    g.clip();
+    smudges(g, 9, 'rgba(120,96,70,.5)', 0.07, 101);
+    smudges(g, 6, 'rgba(255,255,255,.8)', 0.08, 102);
+    scratches(g, 70, '#4a4033', 0.09, 103);
+    scratches(g, 30, '#ffffff', 0.18, 104, 40);
+    // shallow stamped border, like a pressed panel
+    g.strokeStyle = 'rgba(90,72,50,.16)';
+    g.lineWidth = 1;
+    roundRect(g, 9.5, 9.5, DESIGN - 19, DESIGN - 19, 5);
+    g.stroke();
+    g.restore();
+    for (const [x, y] of pins) {
+      circle(g, x, y, 3.2, '#8d8475');
+      circle(g, x, y, 2.1, '#4c463d');
+      circle(g, x - 0.6, y - 0.7, 0.7, 'rgba(255,255,255,.35)');
+    }
+  });
+  addGrain(whiteAlbedo, 0.07, 0.03, 11);
+  const whiteHeight = heightField([
+    { mask: (g) => { tileRect(g, whiteStyle); g.fill(); }, bevel: 2.2, amount: 1.7 },
+    { mask: (g) => { roundRect(g, 9.5, 9.5, DESIGN - 19, DESIGN - 19, 5); g.fill(); }, bevel: 1.2, amount: 0.25 },
+    { mask: (g) => { for (const [x, y] of pins) circle(g, x, y, 2.6, '#fff'); }, bevel: 1, amount: -0.9 },
+  ], 0.22, 12);
+  const whiteAO = cavityAO(whiteHeight, 5, 0.55);
+  bakeOcclusion(whiteAlbedo, whiteAO, 0.55);
   const white = surface(
     whiteAlbedo,
-    normalMapFrom(heightField([
-      { mask: (g) => { tileRect(g, whiteStyle); g.fill(); }, bevel: 7, amount: 3.2 },
-    ], 0.25, 12), 1),
-    roughnessFor(whiteStyle, 0.42, 0.9, 13),
+    normalMapFrom(whiteHeight, 1),
+    packORM(whiteAO, grayCanvas((g) => {
+      g.fillStyle = gray(0.92);
+      g.fillRect(0, 0, DESIGN, DESIGN);
+      tileRect(g, whiteStyle);
+      g.fillStyle = gray(0.3);
+      g.fill();
+      g.save();
+      tileRect(g, whiteStyle);
+      g.clip();
+      smudges(g, 14, 'rgba(255,255,255,.9)', 0.16, 105);
+      scratches(g, 90, '#ffffff', 0.3, 103);
+      g.restore();
+      for (const [x, y] of pins) circle(g, x, y, 3.2, gray(0.55));
+    }, 0.3, 13), 0),
   );
 
-  // Blue metal: portal-proof, riveted, brushed.
+  yield 'Rolling steel plate';
+
+  // ----- Blue steel: portal-proof painted plate, one plate per two world units.
   const metalStyle: TileStyle = {
-    grout: '#1c2c42', top: '#56789f', bottom: '#3d5a82',
-    highlight: 'rgba(170,205,255,.3)', shadow: 'rgba(0,0,0,.4)', inset: 10, radius: 34,
+    grout: '#0b1119', top: '#4f6c96', bottom: '#415c84',
+    highlight: 'rgba(170,205,255,.2)', shadow: 'rgba(0,0,0,.6)', inset: 2.6, radius: 7,
   };
-  const rivets = [[34, 34], [DESIGN - 34, 34], [34, DESIGN - 34], [DESIGN - 34, DESIGN - 34]] as const;
+  const bolts: Array<[number, number]> = [];
+  for (const a of [13, DESIGN / 2, DESIGN - 13]) for (const b of [13, DESIGN / 2, DESIGN - 13]) {
+    if (a !== DESIGN / 2 || b !== DESIGN / 2) bolts.push([a, b]);
+  }
+  const stamp = (g: CanvasRenderingContext2D) => roundRect(g, 26, 26, DESIGN - 52, DESIGN - 52, 9);
+  const wear = (g: CanvasRenderingContext2D) => {
+    chips(g, 4, 4, DESIGN - 8, DESIGN - 8, 30, 2.4, 201);
+    chips(g, 26, 26, DESIGN - 52, DESIGN - 52, 14, 1.6, 202);
+  };
   const metalAlbedo = draw((g) => {
     drawTile(g, metalStyle);
-    // brushed streaks
     g.save();
     tileRect(g, metalStyle);
     g.clip();
-    g.globalAlpha = 0.025;
-    for (let i = 0; i < 120; i++) {
-      const y = hash(i, 1, 77) * DESIGN;
-      g.fillStyle = hash(i, 2, 77) > 0.5 ? '#ffffff' : '#0b1a2e';
-      g.fillRect(0, y, DESIGN, 0.4 + hash(i, 3, 77) * 0.8);
+    // brushed streaks
+    const r = rng(77);
+    for (let i = 0; i < 420; i++) {
+      g.globalAlpha = 0.02 + r() * 0.035;
+      g.fillStyle = r() > 0.5 ? '#bcd3f2' : '#060d18';
+      g.fillRect(r() * DESIGN - 40, r() * DESIGN, 30 + r() * 160, 0.25 + r() * 0.6);
     }
+    g.globalAlpha = 1;
+    smudges(g, 10, 'rgba(8,14,24,.9)', 0.16, 203);
+    smudges(g, 5, 'rgba(150,180,220,.8)', 0.08, 204);
+    // pressed inner panel
+    g.strokeStyle = 'rgba(5,10,20,.55)';
+    g.lineWidth = 1.6;
+    stamp(g);
+    g.stroke();
+    g.strokeStyle = 'rgba(160,195,240,.22)';
+    g.lineWidth = 0.8;
+    roundRect(g, 27.4, 27.4, DESIGN - 54.8, DESIGN - 54.8, 8);
+    g.stroke();
+    // bare steel where the paint has chipped and scratched
+    g.fillStyle = '#93a3b8';
+    wear(g);
+    scratches(g, 60, '#b9c8dc', 0.4, 205, 80);
+    scratches(g, 50, '#050a12', 0.3, 206);
     g.restore();
-    for (const [x, y] of rivets) {
-      circle(g, x + 0.8, y + 1.5, 7.5, 'rgba(10,20,35,.45)');
-      circle(g, x, y, 7, '#7f9dc4');
-      circle(g, x - 2, y - 2, 2.5, 'rgba(255,255,255,.45)');
+    for (const [x, y] of bolts) {
+      circle(g, x + 0.5, y + 1.1, 5.2, 'rgba(0,0,0,.5)');
+      circle(g, x, y, 4.6, '#8a9bb2');
+      circle(g, x, y, 3.3, '#6c7d95');
+      g.strokeStyle = 'rgba(10,16,26,.8)';
+      g.lineWidth = 0.9;
+      g.beginPath();
+      const a = hash(x, y, 9) * Math.PI;
+      g.moveTo(x - Math.cos(a) * 2.6, y - Math.sin(a) * 2.6);
+      g.lineTo(x + Math.cos(a) * 2.6, y + Math.sin(a) * 2.6);
+      g.stroke();
+      circle(g, x - 1.3, y - 1.5, 1, 'rgba(255,255,255,.4)');
     }
   });
-  addGrain(metalAlbedo, 0.08, 0.02, 21);
+  addGrain(metalAlbedo, 0.12, 0.035, 21);
+  const metalHeight = heightField([
+    { mask: (g) => { tileRect(g, metalStyle); g.fill(); }, bevel: 2.6, amount: 2 },
+    { mask: (g) => { stamp(g); g.fill(); }, bevel: 1.6, amount: -0.55 },
+    { mask: (g) => { for (const [x, y] of bolts) circle(g, x, y, 4.4, '#fff'); }, bevel: 1.6, amount: 1.5 },
+    { mask: wear, bevel: 0.6, amount: -0.18 },
+  ], 0.3, 22);
+  const metalAO = cavityAO(metalHeight, 6, 0.5);
+  bakeOcclusion(metalAlbedo, metalAO, 0.6);
   const metal = surface(
     metalAlbedo,
-    normalMapFrom(heightField([
-      { mask: (g) => { tileRect(g, metalStyle); g.fill(); }, bevel: 8, amount: 3 },
-      { mask: (g) => { for (const [x, y] of rivets) circle(g, x, y, 6.5, '#fff'); }, bevel: 3, amount: 2.2 },
-    ], 0.5, 22), 1),
-    roughnessFor(metalStyle, 0.38, 0.85, 23, (g) => {
-      for (const [x, y] of rivets) circle(g, x, y, 7, 'rgb(60,60,60)');
-    }),
+    normalMapFrom(metalHeight, 1),
+    packORM(
+      metalAO,
+      grayCanvas((g) => {
+        g.fillStyle = gray(0.95);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        tileRect(g, metalStyle);
+        g.fillStyle = gray(0.46);
+        g.fill();
+        g.save();
+        tileRect(g, metalStyle);
+        g.clip();
+        const r = rng(78);
+        for (let i = 0; i < 300; i++) {
+          g.globalAlpha = 0.05 + r() * 0.08;
+          g.fillStyle = r() > 0.5 ? '#fff' : '#000';
+          g.fillRect(r() * DESIGN - 40, r() * DESIGN, 30 + r() * 160, 0.3 + r() * 0.8);
+        }
+        g.globalAlpha = 1;
+        g.fillStyle = gray(0.56);
+        wear(g);
+        g.restore();
+        for (const [x, y] of bolts) circle(g, x, y, 4.6, gray(0.36));
+      }, 0.4, 23),
+      grayCanvas((g) => {
+        g.fillStyle = gray(0.2);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        tileRect(g, metalStyle);
+        g.fillStyle = gray(0.32);
+        g.fill();
+        g.fillStyle = gray(1);
+        wear(g);
+        for (const [x, y] of bolts) circle(g, x, y, 4.6, gray(1));
+      }),
+    ),
   );
 
-  // Yellow hazard door.
-  const doorStyle: TileStyle = {
-    grout: '#a87812', top: '#ffd866', bottom: '#ffb92a',
-    highlight: 'rgba(255,255,255,.45)', shadow: 'rgba(110,60,0,.4)', inset: 8, radius: 26,
-  };
-  const stripes = (g: CanvasRenderingContext2D, fill: string) => {
+  yield 'Hanging blast doors';
+
+  // ----- Door: a heavy painted blast door. The texture maps once onto the 2 × 2.6 slab,
+  // so everything is drawn in a space squeezed horizontally to keep circles round.
+  const DOOR_W = DESIGN * (2 / 2.6);
+  const squeeze = (g: CanvasRenderingContext2D, fn: Draw) => {
     g.save();
-    tileRect(g, doorStyle);
-    g.clip();
-    g.fillStyle = fill;
-    for (let x = -DESIGN; x < DESIGN * 2; x += 56) {
-      g.beginPath();
-      g.moveTo(x, DESIGN);
-      g.lineTo(x + 28, DESIGN);
-      g.lineTo(x + 70, DESIGN * 0.78);
-      g.lineTo(x + 42, DESIGN * 0.78);
-      g.fill();
-    }
+    g.scale(DESIGN / DOOR_W, 1);
+    fn(g);
     g.restore();
   };
-  const slot = (g: CanvasRenderingContext2D) => roundRect(g, DESIGN * 0.47, 14, DESIGN * 0.06, DESIGN * 0.6, 8);
-  const doorAlbedo = draw((g) => {
-    drawTile(g, doorStyle);
-    stripes(g, '#2f4766');
-    slot(g);
-    g.fillStyle = 'rgba(47,71,102,.6)';
+  const ribs = [70, 118, 166];
+  const doorPlate = (g: CanvasRenderingContext2D) => roundRect(g, 9, 9, DOOR_W - 18, DESIGN - 18, 6);
+  const doorRibs = (g: CanvasRenderingContext2D) => {
+    for (const y of ribs) { roundRect(g, 18, y - 6, DOOR_W - 36, 12, 4); g.fill(); }
+  };
+  const doorBolts: Array<[number, number]> = [];
+  for (let i = 0; i < 7; i++) {
+    doorBolts.push([4.6, 16 + i * 37.3], [DOOR_W - 4.6, 16 + i * 37.3]);
+  }
+  for (let i = 1; i < 5; i++) doorBolts.push([i * (DOOR_W / 5), 4.6], [i * (DOOR_W / 5), DESIGN - 4.6]);
+  const doorWear = (g: CanvasRenderingContext2D) => {
+    chips(g, 9, 9, DOOR_W - 18, DESIGN - 18, 60, 2.4, 301);
+    for (const y of ribs) chips(g, 18, y - 6, DOOR_W - 36, 12, 16, 1.5, 302 + y);
+    chips(g, 14, DESIGN - 40, DOOR_W - 28, 26, 26, 2.2, 309);
+  };
+  const doorAlbedo = draw((g) => squeeze(g, (g) => {
+    g.fillStyle = '#1b222d';
+    g.fillRect(0, 0, DOOR_W, DESIGN);
+    doorPlate(g);
+    const grd = g.createLinearGradient(0, 0, 0, DESIGN);
+    grd.addColorStop(0, '#e9b22c');
+    grd.addColorStop(1, '#d09314');
+    g.fillStyle = grd;
     g.fill();
-  });
-  addGrain(doorAlbedo, 0.08, 0.03, 31);
+    g.save();
+    doorPlate(g);
+    g.clip();
+    // hazard band along the bottom
+    g.fillStyle = '#141a24';
+    for (let x = -60; x < DOOR_W + 60; x += 34) {
+      g.beginPath();
+      g.moveTo(x, DESIGN - 12);
+      g.lineTo(x + 17, DESIGN - 12);
+      g.lineTo(x + 43, DESIGN - 42);
+      g.lineTo(x + 26, DESIGN - 42);
+      g.fill();
+    }
+    g.fillRect(0, DESIGN - 44, DOOR_W, 2);
+    // dark header with a stencilled label
+    g.fillStyle = '#1d2531';
+    g.fillRect(0, 9, DOOR_W, 30);
+    g.fillStyle = '#e9b22c';
+    g.font = '700 13px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('CHAMBER LOCK', DOOR_W / 2, 20);
+    g.font = '700 6.5px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+    g.fillText('OPENS UNDER LOAD  ▲  KEEP CLEAR', DOOR_W / 2, 31.5);
+    // raised ribs: lit above, shaded below
+    for (const y of ribs) {
+      g.fillStyle = 'rgba(255,240,190,.28)';
+      g.fillRect(18, y - 6, DOOR_W - 36, 2);
+      g.fillStyle = 'rgba(70,40,0,.4)';
+      g.fillRect(18, y + 4.5, DOOR_W - 36, 2.5);
+    }
+    // centre seam
+    g.fillStyle = 'rgba(40,24,0,.75)';
+    g.fillRect(DOOR_W / 2 - 0.9, 39, 1.8, DESIGN - 83);
+    smudges(g, 12, 'rgba(70,40,0,.9)', 0.16, 303);
+    scratches(g, 80, '#3a2600', 0.3, 304, 70);
+    g.fillStyle = '#5d6673';
+    doorWear(g);
+    g.restore();
+    for (const [x, y] of doorBolts) {
+      circle(g, x, y, 2.6, '#7d8898');
+      circle(g, x - 0.6, y - 0.7, 0.8, 'rgba(255,255,255,.45)');
+    }
+  }));
+  addGrain(doorAlbedo, 0.1, 0.035, 31);
+  const doorHeight = heightField([
+    { mask: (g) => squeeze(g, (g) => { doorPlate(g); g.fill(); }), bevel: 2.4, amount: 2.2 },
+    { mask: (g) => squeeze(g, doorRibs), bevel: 2, amount: 1.6 },
+    { mask: (g) => squeeze(g, (g) => g.fillRect(DOOR_W / 2 - 1.2, 39, 2.4, DESIGN - 83)), bevel: 1, amount: -1.2 },
+    { mask: (g) => squeeze(g, (g) => { for (const [x, y] of doorBolts) circle(g, x, y, 2.6, '#fff'); }), bevel: 1, amount: 1 },
+    { mask: (g) => squeeze(g, doorWear), bevel: 0.6, amount: -0.2 },
+  ], 0.25, 32);
+  const doorAO = cavityAO(doorHeight, 6, 0.5);
+  bakeOcclusion(doorAlbedo, doorAO, 0.6);
   const door = surface(
     doorAlbedo,
-    normalMapFrom(heightField([
-      { mask: (g) => { tileRect(g, doorStyle); g.fill(); }, bevel: 7, amount: 3 },
-      { mask: (g) => stripes(g, '#fff'), bevel: 1.5, amount: 0.6 },
-      { mask: (g) => { slot(g); g.fill(); }, bevel: 3, amount: -1.6 },
-    ], 0.3, 32), 1),
-    roughnessFor(doorStyle, 0.4, 0.85, 33),
+    normalMapFrom(doorHeight, 1),
+    packORM(
+      doorAO,
+      grayCanvas((g) => squeeze(g, (g) => {
+        g.fillStyle = gray(0.5);
+        g.fillRect(0, 0, DOOR_W, DESIGN);
+        doorPlate(g);
+        g.fillStyle = gray(0.42);
+        g.fill();
+        g.fillStyle = gray(0.3);
+        doorWear(g);
+      }), 0.45, 33),
+      grayCanvas((g) => squeeze(g, (g) => {
+        g.fillStyle = gray(0.9);
+        g.fillRect(0, 0, DOOR_W, DESIGN);
+        doorPlate(g);
+        g.fillStyle = gray(0.12);
+        g.fill();
+        g.fillStyle = gray(1);
+        doorWear(g);
+        for (const [x, y] of doorBolts) circle(g, x, y, 2.6, gray(1));
+      })),
+    ),
   );
 
-  // Companion-style cube face.
+  yield 'Stamping weighted crates';
+
+  // ----- Weighted crate face. The corners sit under the bumpers, so the
+  // detail lives in a plus-shaped armour plate and the strips between them.
+  const C = DESIGN / 2;
+  const plate = (g: CanvasRenderingContext2D, inset = 0) => {
+    const e = 13 + inset;
+    const k = 76 + inset * 0.4;
+    g.beginPath();
+    g.moveTo(k, e); g.lineTo(DESIGN - k, e); g.lineTo(DESIGN - k, k - 10); g.lineTo(DESIGN - k + 10, k);
+    g.lineTo(DESIGN - e, k); g.lineTo(DESIGN - e, DESIGN - k); g.lineTo(DESIGN - k + 10, DESIGN - k);
+    g.lineTo(DESIGN - k, DESIGN - k + 10); g.lineTo(DESIGN - k, DESIGN - e); g.lineTo(k, DESIGN - e);
+    g.lineTo(k, DESIGN - k + 10); g.lineTo(k - 10, DESIGN - k); g.lineTo(e, DESIGN - k); g.lineTo(e, k);
+    g.lineTo(k - 10, k); g.lineTo(k, k - 10);
+    g.closePath();
+  };
+  const housingBolts = Array.from({ length: 8 }, (_, i) => {
+    const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+    return [C + Math.cos(a) * 50, C + Math.sin(a) * 50] as const;
+  });
+  const plateBolts = [[84, 22], [172, 22], [84, 234], [172, 234], [22, 84], [22, 172], [234, 84], [234, 172]] as const;
+  const vents = (g: CanvasRenderingContext2D) => {
+    for (let i = 0; i < 4; i++) { roundRect(g, 22, 104 + i * 13, 26, 6, 3); g.fill(); }
+  };
+  const seams = (g: CanvasRenderingContext2D) => {
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      g.beginPath();
+      g.moveTo(C + Math.cos(a) * 60, C + Math.sin(a) * 60);
+      g.lineTo(C + Math.cos(a) * 92, C + Math.sin(a) * 92);
+      g.stroke();
+    }
+    g.strokeRect(92, 40, 72, 0.01);
+    g.strokeRect(92, 216, 72, 0.01);
+  };
   const cubeAlbedo = draw((g) => {
-    g.fillStyle = '#2ec4b6';
+    // gunmetal frame
+    g.fillStyle = '#39414e';
     g.fillRect(0, 0, DESIGN, DESIGN);
-    // corner bumpers, a shade darker
-    g.fillStyle = '#25a89c';
-    for (const [x, y] of [[0, 0], [DESIGN - 40, 0], [0, DESIGN - 40], [DESIGN - 40, DESIGN - 40]] as const) {
-      roundRect(g, x + 4, y + 4, 32, 32, 10);
+    scratches(g, 50, '#aab4c2', 0.25, 400, 30);
+    // armour plate
+    plate(g);
+    g.fillStyle = '#e9e0cf';
+    g.fill();
+    g.save();
+    plate(g);
+    g.clip();
+    const sheen = g.createLinearGradient(0, 0, DESIGN, DESIGN);
+    sheen.addColorStop(0, 'rgba(255,255,255,.14)');
+    sheen.addColorStop(1, 'rgba(70,50,30,.14)');
+    g.fillStyle = sheen;
+    g.fillRect(0, 0, DESIGN, DESIGN);
+    smudges(g, 10, 'rgba(110,90,60,.8)', 0.1, 401);
+    scratches(g, 90, '#5a4c3a', 0.2, 402);
+    scratches(g, 30, '#ffffff', 0.3, 404, 36);
+    // hazard strip along the top arm
+    g.save();
+    g.beginPath();
+    g.rect(92, 20, 72, 13);
+    g.clip();
+    g.fillStyle = '#f2b824';
+    g.fillRect(92, 20, 72, 13);
+    g.fillStyle = '#23262e';
+    for (let x = 80; x < 180; x += 12) {
+      g.beginPath();
+      g.moveTo(x, 33); g.lineTo(x + 6, 33); g.lineTo(x + 16, 20); g.lineTo(x + 10, 20);
       g.fill();
     }
-    g.save();
-    g.filter = 'blur(3px)';
-    roundRect(g, 27, 29, DESIGN - 52, DESIGN - 52, 34);
-    g.fillStyle = 'rgba(0,40,40,.35)';
-    g.fill();
     g.restore();
-    roundRect(g, 26, 26, DESIGN - 52, DESIGN - 52, 34);
-    g.fillStyle = '#fff3e2';
+    // stencilled markings along the bottom arm
+    g.fillStyle = 'rgba(42,46,56,.86)';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = '700 11px "Arial Narrow", Arial, sans-serif';
+    g.fillText('LL-C7  ·  40 KG', C, 226);
+    g.font = '600 5px Arial, sans-serif';
+    g.fillText('WEIGHTED TEST CRATE  ·  DO NOT STACK', C, 237);
+    // label plate on the right arm
+    g.fillStyle = '#20242c';
+    roundRect(g, 210, 104, 26, 48, 2);
     g.fill();
-    circle(g, DESIGN / 2, DESIGN / 2, 56, '#2c2442');
-    circle(g, DESIGN / 2, DESIGN / 2, 38, '#ffd36b');
+    g.fillStyle = '#d7dde6';
+    const bars = rng(405);
+    for (let y = 109; y < 134; y += 1.6 + bars() * 2.4) g.fillRect(214, y, 12, 0.6 + bars() * 1.2);
+    g.fillStyle = '#2dc4b2';
+    g.fillRect(229, 108, 3, 26);
+    // panel seams
+    g.strokeStyle = 'rgba(58,48,36,.7)';
+    g.lineWidth = 1.5;
+    seams(g);
+    g.restore();
+    // vents on the left arm
+    g.fillStyle = '#14171c';
+    vents(g);
+    // core housing
+    circle(g, C, C, 60, '#2a2f39');
+    circle(g, C, C, 57, '#6f7885');
+    circle(g, C, C, 42, '#22262e');
+    circle(g, C, C, 38, '#39404b');
+    circle(g, C, C, 33, '#ffd36b');
+    g.strokeStyle = 'rgba(20,22,28,.6)';
+    g.lineWidth = 0.8;
+    for (let i = 0; i < 48; i++) {
+      const a = (i / 48) * Math.PI * 2;
+      g.beginPath();
+      g.moveTo(C + Math.cos(a) * 43.5, C + Math.sin(a) * 43.5);
+      g.lineTo(C + Math.cos(a) * 46.5, C + Math.sin(a) * 46.5);
+      g.stroke();
+    }
+    for (const [x, y] of housingBolts) {
+      circle(g, x, y, 3.4, '#262a32');
+      circle(g, x, y, 2.5, '#9aa3b0');
+      g.fillStyle = '#2b2f37';
+      g.fillRect(x - 2, y - 0.4, 4, 0.8);
+    }
+    for (const [x, y] of plateBolts) {
+      circle(g, x, y, 3, '#8b8373');
+      circle(g, x, y, 2, '#4b463d');
+      circle(g, x - 0.5, y - 0.6, 0.6, 'rgba(255,255,255,.4)');
+    }
+    // paint flaked off around the plate edge and the housing
+    g.fillStyle = '#6a7380';
+    chips(g, 13, 76, DESIGN - 26, DESIGN - 152, 26, 2.2, 403);
+    chips(g, 76, 13, DESIGN - 152, DESIGN - 26, 26, 2.2, 406);
   });
-  addGrain(cubeAlbedo, 0.06, 0.03, 41);
+  addGrain(cubeAlbedo, 0.08, 0.035, 41);
+  const cubeHeight = heightField([
+    { mask: (g) => { plate(g); g.fill(); }, bevel: 2.5, amount: 2 },
+    { mask: (g) => { plate(g, 6); g.fill(); }, bevel: 1.5, amount: -0.5 },
+    { mask: (g) => { plate(g, 8); g.fill(); }, bevel: 1.5, amount: 0.5 },
+    { mask: (g) => { g.strokeStyle = '#fff'; g.lineWidth = 2; seams(g); }, bevel: 1, amount: -1.6 },
+    { mask: vents, bevel: 1, amount: -2.4 },
+    { mask: (g) => { roundRect(g, 210, 104, 26, 48, 2); g.fill(); }, bevel: 1, amount: 0.7 },
+    { mask: (g) => circle(g, C, C, 60, '#fff'), bevel: 2, amount: 2.2 },
+    { mask: (g) => circle(g, C, C, 42, '#fff'), bevel: 2, amount: -2.6 },
+    { mask: (g) => circle(g, C, C, 38, '#fff'), bevel: 1.5, amount: 1 },
+    { mask: (g) => circle(g, C, C, 33, '#fff'), bevel: 2, amount: -1 },
+    { mask: (g) => { for (const [x, y] of housingBolts) circle(g, x, y, 3, '#fff'); }, bevel: 1, amount: 1.4 },
+    { mask: (g) => { for (const [x, y] of plateBolts) circle(g, x, y, 2.8, '#fff'); }, bevel: 1, amount: 1.2 },
+  ], 0.25, 42);
+  const cubeAO = cavityAO(cubeHeight, 8, 0.4);
+  bakeOcclusion(cubeAlbedo, cubeAO, 0.55);
   const cube = surface(
     cubeAlbedo,
-    normalMapFrom(heightField([
-      { mask: (g) => { roundRect(g, 26, 26, DESIGN - 52, DESIGN - 52, 34); g.fill(); }, bevel: 5, amount: -2 },
-      { mask: (g) => circle(g, DESIGN / 2, DESIGN / 2, 56, '#fff'), bevel: 4, amount: 2.4 },
-      { mask: (g) => circle(g, DESIGN / 2, DESIGN / 2, 38, '#fff'), bevel: 2, amount: -1 },
-    ], 0.2, 42), 1),
-    grayCanvas((g) => {
-      g.fillStyle = 'rgb(110,110,110)';
-      g.fillRect(0, 0, DESIGN, DESIGN);
-      roundRect(g, 26, 26, DESIGN - 52, DESIGN - 52, 34);
-      g.fillStyle = 'rgb(90,90,90)';
-      g.fill();
-      circle(g, DESIGN / 2, DESIGN / 2, 38, 'rgb(40,40,40)');
-    }),
+    normalMapFrom(cubeHeight, 1.1),
+    packORM(
+      cubeAO,
+      grayCanvas((g) => {
+        g.fillStyle = gray(0.46);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        plate(g);
+        g.fillStyle = gray(0.34);
+        g.fill();
+        g.fillStyle = gray(0.62);
+        g.fillRect(92, 20, 72, 13);
+        circle(g, C, C, 60, gray(0.28));
+        circle(g, C, C, 42, gray(0.5));
+        circle(g, C, C, 33, gray(0.1));
+        g.fillStyle = gray(0.7);
+        chips(g, 13, 76, DESIGN - 26, DESIGN - 152, 26, 2.2, 403);
+        chips(g, 76, 13, DESIGN - 152, DESIGN - 26, 26, 2.2, 406);
+      }, 0.4, 43),
+      grayCanvas((g) => {
+        g.fillStyle = gray(0.85);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        plate(g);
+        g.fillStyle = gray(0.06);
+        g.fill();
+        circle(g, C, C, 60, gray(1));
+        circle(g, C, C, 33, gray(0));
+        g.fillStyle = gray(0.85);
+        chips(g, 13, 76, DESIGN - 26, DESIGN - 152, 26, 2.2, 403);
+        chips(g, 76, 13, DESIGN - 152, DESIGN - 26, 26, 2.2, 406);
+      }),
+    ),
   );
 
   const cubeEmissive = toTexture(draw((g) => {
@@ -458,12 +933,619 @@ export function createTextures(): GameTextures {
     g.fillRect(0, 0, DESIGN, DESIGN);
     g.save();
     g.filter = 'blur(4px)';
-    circle(g, DESIGN / 2, DESIGN / 2, 40, '#a86a00');
+    circle(g, C, C, 36, '#a86a00');
     g.restore();
-    circle(g, DESIGN / 2, DESIGN / 2, 37, '#ffc23d');
+    circle(g, C, C, 32, '#ffc23d');
+    // status strip on the label plate
+    g.fillStyle = '#ffc23d';
+    for (let i = 0; i < 4; i++) g.fillRect(214, 138 + i * 3, 18, 1.4);
   }), true);
 
-  const all = [white, metal, door, cube].flatMap((s) => [s.map, s.normalMap, s.roughnessMap]);
-  all.push(cubeEmissive);
-  return { white, metal, door, cube, cubeEmissive, all };
+  yield 'Wiring pressure plates';
+
+  // ----- Pressure plate. Both maps are discs that fill the square: the base
+  // is seen as a ring around the cap, the cap is tinted red or green in game.
+  const ringPath = (g: CanvasRenderingContext2D, r0: number, r1: number) => {
+    g.beginPath();
+    g.arc(C, C, r1, 0, Math.PI * 2);
+    g.arc(C, C, r0, 0, Math.PI * 2, true);
+  };
+  const around = (n: number, r: number, offset = 0) => Array.from({ length: n }, (_, i) => {
+    const a = (i / n) * Math.PI * 2 + offset;
+    return [C + Math.cos(a) * r, C + Math.sin(a) * r, a] as const;
+  });
+  /** Letters along an arc. They read from the middle of the disc, or from outside it with `outward`. */
+  const arcText = (g: CanvasRenderingContext2D, text: string, r: number, mid: number, step: number, outward = false) => {
+    const flip = Math.sin(mid) > 0 !== outward;
+    [...text].forEach((ch, i) => {
+      const a = mid + (i - (text.length - 1) / 2) * step * (flip ? -1 : 1);
+      g.save();
+      g.translate(C + Math.cos(a) * r, C + Math.sin(a) * r);
+      g.rotate(a + (flip ? -Math.PI / 2 : Math.PI / 2));
+      g.fillText(ch, 0, 0);
+      g.restore();
+    });
+  };
+  const baseBolts = around(16, 121, Math.PI / 16);
+  const baseLeds = around(4, 107, Math.PI / 4);
+  const ledSlot = (g: CanvasRenderingContext2D, grow = 0) => {
+    for (const [x, y, a] of baseLeds) {
+      g.save();
+      g.translate(x, y);
+      g.rotate(a + Math.PI / 2);
+      roundRect(g, -9 - grow, -2.5 - grow, 18 + grow * 2, 5 + grow * 2, 2.5 + grow);
+      g.fill();
+      g.restore();
+    }
+  };
+  const hazardArcs = (g: CanvasRenderingContext2D) => {
+    for (const mid of [0, Math.PI]) {
+      for (let i = -5; i < 5; i++) {
+        const a0 = mid + i * 0.062;
+        g.beginPath();
+        g.arc(C, C, 113, a0 + 0.02, a0 + 0.051);
+        g.arc(C, C, 101, a0 + 0.031, a0, true);
+        g.closePath();
+        g.fill();
+      }
+    }
+  };
+  const buttonBaseAlbedo = draw((g) => {
+    g.fillStyle = '#566170';
+    g.fillRect(0, 0, DESIGN, DESIGN);
+    // lathe marks
+    for (let r = 92; r < 128; r += 0.9) {
+      g.strokeStyle = `rgba(${hash(r * 10, 3, 7) > 0.5 ? '255,255,255' : '10,14,20'},${0.03 + hash(r * 10, 5, 9) * 0.06})`;
+      g.lineWidth = 0.5;
+      g.beginPath();
+      g.arc(C, C, r, 0, Math.PI * 2);
+      g.stroke();
+    }
+    // painted warning band, striped at the sides, lettered front and back
+    ringPath(g, 100, 114);
+    g.fillStyle = '#e9b21f';
+    g.fill('evenodd');
+    g.fillStyle = '#23262e';
+    hazardArcs(g);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = '700 9px "Arial Narrow", Arial, sans-serif';
+    arcText(g, 'PRESSURE PLATE', 107, -Math.PI / 2, 0.062);
+    arcText(g, '40 KG MIN LOAD', 107, Math.PI / 2, 0.062);
+    g.fillStyle = '#14171c';
+    ledSlot(g, 1.6);
+    g.fillStyle = '#d9dee6';
+    ledSlot(g);
+    g.save();
+    ringPath(g, 92, 128);
+    g.clip('evenodd');
+    scratches(g, 160, '#dfe6ee', 0.22, 601, 26);
+    scratches(g, 80, '#11151b', 0.3, 602, 40);
+    smudges(g, 14, 'rgba(20,16,10,.9)', 0.12, 603);
+    g.restore();
+    for (const [x, y, a] of baseBolts) {
+      circle(g, x, y, 3.6, '#22272f');
+      circle(g, x, y, 2.7, '#a3acb9');
+      g.save();
+      g.translate(x, y);
+      g.rotate(a * 3);
+      g.fillStyle = '#2a2f38';
+      g.fillRect(-2.1, -0.45, 4.2, 0.9);
+      g.restore();
+    }
+    // paint worn off the band where boots scuff it
+    const wear = rng(604);
+    g.fillStyle = '#66717f';
+    for (let i = 0; i < 70; i++) {
+      const a = wear() * Math.PI * 2;
+      const r = wear() > 0.5 ? 100 + wear() * 2.5 : 114 - wear() * 2.5;
+      g.beginPath();
+      g.ellipse(C + Math.cos(a) * r, C + Math.sin(a) * r, 0.6 + wear() * 2.4, 0.5 + wear() * 1.2, a + Math.PI / 2, 0, Math.PI * 2);
+      g.fill();
+    }
+  });
+  addGrain(buttonBaseAlbedo, 0.07, 0.03, 61);
+  const buttonBaseHeight = heightField([
+    { mask: (g) => circle(g, C, C, 126, '#fff'), bevel: 2, amount: 2 },
+    { mask: (g) => { ringPath(g, 96, 98.5); g.fill('evenodd'); }, bevel: 1, amount: -2 },
+    { mask: (g) => { ringPath(g, 115.5, 117); g.fill('evenodd'); }, bevel: 0.8, amount: -1.2 },
+    { mask: (g) => ledSlot(g, 1.6), bevel: 1, amount: -1.6 },
+    { mask: (g) => { for (const [x, y] of baseBolts) circle(g, x, y, 3.2, '#fff'); }, bevel: 1, amount: 1.6 },
+  ], 0.2, 62);
+  const buttonBaseAO = cavityAO(buttonBaseHeight, 6, 0.45);
+  bakeOcclusion(buttonBaseAlbedo, buttonBaseAO, 0.6);
+  const buttonBase = surface(
+    buttonBaseAlbedo,
+    normalMapFrom(buttonBaseHeight, 1.1),
+    packORM(
+      buttonBaseAO,
+      grayCanvas((g) => {
+        g.fillStyle = gray(0.34);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        ringPath(g, 100, 114);
+        g.fillStyle = gray(0.6);
+        g.fill('evenodd');
+        g.fillStyle = gray(0.15);
+        ledSlot(g);
+      }, 0.45, 63),
+      grayCanvas((g) => {
+        g.fillStyle = gray(1);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        ringPath(g, 100, 114);
+        g.fillStyle = gray(0.1);
+        g.fill('evenodd');
+        g.fillStyle = gray(0);
+        ledSlot(g);
+      }),
+    ),
+  );
+  const buttonBaseEmissive = toTexture(draw((g) => {
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, DESIGN, DESIGN);
+    g.save();
+    g.filter = 'blur(3px)';
+    g.fillStyle = '#777';
+    ledSlot(g, 2);
+    g.restore();
+    g.fillStyle = '#fff';
+    ledSlot(g);
+  }), true);
+
+  const grips = around(40, 86);
+  const gripMarks = (g: CanvasRenderingContext2D, w: number) => {
+    for (const [x, y, a] of grips) {
+      g.save();
+      g.translate(x, y);
+      g.rotate(a);
+      roundRect(g, -11, -w / 2, 22, w, w / 2);
+      g.fill();
+      g.restore();
+    }
+  };
+  const loadIcon = (g: CanvasRenderingContext2D) => {
+    // a crate bearing down on a plate
+    g.lineWidth = 3;
+    g.lineJoin = 'miter';
+    g.strokeRect(C - 11, C - 17, 22, 22);
+    g.fillRect(C - 19, C + 11, 38, 3.4);
+    g.beginPath();
+    g.moveTo(C - 5, C - 9); g.lineTo(C, C - 3); g.lineTo(C + 5, C - 9);
+    g.stroke();
+  };
+  const buttonCapAlbedo = draw((g) => {
+    g.fillStyle = '#f4efee';
+    g.fillRect(0, 0, DESIGN, DESIGN);
+    const dome = g.createRadialGradient(C - 30, C - 40, 10, C, C, 128);
+    dome.addColorStop(0, 'rgba(255,255,255,.5)');
+    dome.addColorStop(1, 'rgba(120,110,110,.28)');
+    g.fillStyle = dome;
+    g.fillRect(0, 0, DESIGN, DESIGN);
+    g.fillStyle = 'rgba(70,60,60,.5)';
+    gripMarks(g, 4.4);
+    g.strokeStyle = 'rgba(60,50,50,.55)';
+    g.lineWidth = 1.6;
+    for (const r of [118, 104, 66]) { g.beginPath(); g.arc(C, C, r, 0, Math.PI * 2); g.stroke(); }
+    // light ring and icon read as pale glass until they glow
+    ringPath(g, 50, 58);
+    g.fillStyle = '#fffdfa';
+    g.fill('evenodd');
+    g.fillStyle = g.strokeStyle = '#fffdfa';
+    loadIcon(g);
+    scratches(g, 220, '#4b4040', 0.2, 611, 34);
+    scratches(g, 90, '#ffffff', 0.4, 612, 22);
+    smudges(g, 12, 'rgba(60,45,45,.9)', 0.1, 613);
+    // bare metal where the paint has chipped at the rim
+    const wear = rng(614);
+    g.fillStyle = '#8f8a8c';
+    for (let i = 0; i < 90; i++) {
+      const a = wear() * Math.PI * 2;
+      const r = 127 - wear() * wear() * 12;
+      g.beginPath();
+      g.ellipse(C + Math.cos(a) * r, C + Math.sin(a) * r, 0.8 + wear() * 3.4, 0.5 + wear() * 1.4, a + Math.PI / 2, 0, Math.PI * 2);
+      g.fill();
+    }
+  });
+  addGrain(buttonCapAlbedo, 0.06, 0.03, 64);
+  const buttonCapHeight = heightField([
+    { mask: (g) => circle(g, C, C, 125, '#fff'), bevel: 3, amount: 2 },
+    { mask: (g) => { ringPath(g, 117, 119); g.fill('evenodd'); }, bevel: 0.8, amount: -1.4 },
+    { mask: (g) => { ringPath(g, 103, 105); g.fill('evenodd'); }, bevel: 0.8, amount: -1.4 },
+    { mask: (g) => gripMarks(g, 4.4), bevel: 1, amount: 1.5 },
+    { mask: (g) => circle(g, C, C, 66, '#fff'), bevel: 1.5, amount: -1.2 },
+    { mask: (g) => { ringPath(g, 50, 58); g.fill('evenodd'); }, bevel: 1, amount: 0.9 },
+  ], 0.2, 65);
+  const buttonCapAO = cavityAO(buttonCapHeight, 6, 0.45);
+  bakeOcclusion(buttonCapAlbedo, buttonCapAO, 0.6);
+  const buttonCap = surface(
+    buttonCapAlbedo,
+    normalMapFrom(buttonCapHeight, 1.1),
+    packORM(
+      buttonCapAO,
+      grayCanvas((g) => {
+        g.fillStyle = gray(0.32);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        g.fillStyle = gray(0.6);
+        gripMarks(g, 4.4);
+        ringPath(g, 50, 58);
+        g.fillStyle = gray(0.12);
+        g.fill('evenodd');
+      }, 0.45, 66),
+      0.15,
+    ),
+  );
+  const buttonCapEmissive = toTexture(draw((g) => {
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, DESIGN, DESIGN);
+    g.save();
+    g.filter = 'blur(5px)';
+    ringPath(g, 48, 60);
+    g.fillStyle = '#666';
+    g.fill('evenodd');
+    g.restore();
+    ringPath(g, 50, 58);
+    g.fillStyle = '#fff';
+    g.fill('evenodd');
+    g.fillStyle = g.strokeStyle = '#fff';
+    loadIcon(g);
+  }), true);
+
+  yield 'Charging exit pads';
+
+  // ----- Exit pad: a disc that fills the square. Steel rim, lettered band,
+  // segmented tread deck, and a glass emitter lens in the middle.
+  const padBolts = around(12, 122, Math.PI / 12);
+  const collarBolts = around(8, 40, Math.PI / 8);
+  /** Radial joints between the twelve deck segments; `lit` keeps every other one. */
+  const deckSeams = (g: CanvasRenderingContext2D, w: number, lit = false) => {
+    g.lineWidth = w;
+    g.lineCap = 'butt';
+    for (let i = lit ? 1 : 0; i < 12; i += lit ? 2 : 1) {
+      const a = (i / 12) * Math.PI * 2;
+      g.beginPath();
+      g.moveTo(C + Math.cos(a) * 50, C + Math.sin(a) * 50);
+      g.lineTo(C + Math.cos(a) * 94, C + Math.sin(a) * 94);
+      g.stroke();
+    }
+  };
+  /** Anti-slip ribs: short arcs across each deck segment. */
+  const treads = (g: CanvasRenderingContext2D, w: number) => {
+    g.lineWidth = w;
+    g.lineCap = 'round';
+    for (let i = 0; i < 12; i++) {
+      const a0 = (i / 12) * Math.PI * 2;
+      for (let r = 56; r <= 90; r += 5.6) {
+        const inset = 3.4 / r;
+        g.beginPath();
+        g.arc(C, C, r, a0 + inset, a0 + Math.PI / 6 - inset);
+        g.stroke();
+      }
+    }
+  };
+  /** Three inward-pointing chevrons at each of six stations on the band. */
+  const padChevrons = (g: CanvasRenderingContext2D, w: number) => {
+    g.lineWidth = w;
+    g.lineCap = 'butt';
+    g.lineJoin = 'miter';
+    for (const mid of [0, Math.PI, Math.PI / 4, (3 * Math.PI) / 4, (5 * Math.PI) / 4, (7 * Math.PI) / 4]) {
+      for (let k = -1; k <= 1; k++) {
+        g.save();
+        g.translate(C, C);
+        g.rotate(mid + k * 0.085);
+        g.beginPath();
+        g.moveTo(110.5, -3.6); g.lineTo(104, 0); g.lineTo(110.5, 3.6);
+        g.stroke();
+        g.restore();
+      }
+    }
+  };
+  const lensRings = (g: CanvasRenderingContext2D, w: number) => {
+    g.lineWidth = w;
+    for (let r = 5; r < 32; r += 4.5) { g.beginPath(); g.arc(C, C, r, 0, Math.PI * 2); g.stroke(); }
+  };
+  const fillRing = (g: CanvasRenderingContext2D, r0: number, r1: number, fill: string) => {
+    ringPath(g, r0, r1);
+    g.fillStyle = fill;
+    g.fill('evenodd');
+  };
+  const goalAlbedo = draw((g) => {
+    g.fillStyle = '#515b68';
+    g.fillRect(0, 0, DESIGN, DESIGN);
+    for (let r = 30; r < 128; r += 0.9) {
+      g.strokeStyle = `rgba(${hash(r * 10, 3, 71) > 0.5 ? '255,255,255' : '10,14,20'},${0.03 + hash(r * 10, 5, 73) * 0.06})`;
+      g.lineWidth = 0.5;
+      g.beginPath();
+      g.arc(C, C, r, 0, Math.PI * 2);
+      g.stroke();
+    }
+    // lettered band
+    fillRing(g, 100, 114, '#1a1f26');
+    g.fillStyle = '#c9d2dc';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = '700 9px "Arial Narrow", Arial, sans-serif';
+    arcText(g, 'CHAMBER EXIT', 107, -Math.PI / 2, 0.062, true);
+    arcText(g, 'CHAMBER EXIT', 107, Math.PI / 2, 0.062, true);
+    g.strokeStyle = '#e4f6ee';
+    padChevrons(g, 1.8);
+    // light channels read as pale glass until they glow
+    fillRing(g, 96.5, 99.5, '#dff3ea');
+    fillRing(g, 45.5, 47.5, '#dff3ea');
+    // tread deck
+    fillRing(g, 47.5, 96.5, '#262b33');
+    g.strokeStyle = '#3d4551';
+    treads(g, 2.6);
+    g.strokeStyle = '#0c0f13';
+    deckSeams(g, 2.4);
+    g.strokeStyle = '#dff3ea';
+    deckSeams(g, 1, true);
+    // emitter lens
+    const lens = g.createRadialGradient(C, C, 0, C, C, 33);
+    lens.addColorStop(0, '#22413a');
+    lens.addColorStop(1, '#0a1513');
+    g.fillStyle = lens;
+    g.beginPath(); g.arc(C, C, 33, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = 'rgba(190,255,225,.22)';
+    lensRings(g, 0.8);
+    g.save();
+    ringPath(g, 33, 128);
+    g.clip('evenodd');
+    scratches(g, 260, '#dfe6ee', 0.2, 701, 30);
+    scratches(g, 120, '#0b0e12', 0.3, 702, 44);
+    smudges(g, 18, 'rgba(20,16,10,.9)', 0.14, 703);
+    g.restore();
+    // boots polish the ribs back to bare metal
+    const wear = rng(704);
+    g.fillStyle = 'rgba(132,143,157,.75)';
+    for (let i = 0; i < 150; i++) {
+      const a = wear() * Math.PI * 2;
+      const r = 56 + Math.floor(wear() * 7) * 5.6;
+      g.beginPath();
+      g.ellipse(C + Math.cos(a) * r, C + Math.sin(a) * r, 0.8 + wear() * 3.2, 0.5 + wear() * 0.7, a + Math.PI / 2, 0, Math.PI * 2);
+      g.fill();
+    }
+    for (const [list, size] of [[padBolts, 1], [collarBolts, 0.8]] as const) {
+      for (const [x, y, a] of list) {
+        circle(g, x, y, 3.6 * size, '#1f242b');
+        circle(g, x, y, 2.7 * size, '#a3acb9');
+        g.save();
+        g.translate(x, y);
+        g.rotate(a * 3);
+        g.fillStyle = '#2a2f38';
+        g.fillRect(-2.1 * size, -0.45, 4.2 * size, 0.9);
+        g.restore();
+      }
+    }
+  });
+  addGrain(goalAlbedo, 0.07, 0.03, 71);
+  const goalHeight = heightField([
+    { mask: (g) => circle(g, C, C, 126, '#fff'), bevel: 2, amount: 2 },
+    { mask: (g) => { ringPath(g, 100, 114); g.fill('evenodd'); }, bevel: 1, amount: -0.6 },
+    { mask: (g) => { ringPath(g, 96.5, 99.5); g.fill('evenodd'); }, bevel: 0.8, amount: -1.5 },
+    { mask: (g) => { ringPath(g, 47.5, 96.5); g.fill('evenodd'); }, bevel: 1.5, amount: -1.2 },
+    { mask: (g) => { g.strokeStyle = '#fff'; treads(g, 2.6); }, bevel: 0.8, amount: 1.5 },
+    { mask: (g) => { g.strokeStyle = '#fff'; deckSeams(g, 2.4); }, bevel: 0.8, amount: -1.6 },
+    { mask: (g) => { ringPath(g, 34, 45.5); g.fill('evenodd'); }, bevel: 1.5, amount: 1.4 },
+    { mask: (g) => circle(g, C, C, 33, '#fff'), bevel: 2, amount: -2 },
+    { mask: (g) => { g.strokeStyle = '#fff'; lensRings(g, 1.2); }, bevel: 0.6, amount: 0.5 },
+    { mask: (g) => { for (const [x, y] of padBolts) circle(g, x, y, 3.2, '#fff'); for (const [x, y] of collarBolts) circle(g, x, y, 2.6, '#fff'); }, bevel: 1, amount: 1.6 },
+  ], 0.2, 72);
+  const goalAO = cavityAO(goalHeight, 6, 0.45);
+  bakeOcclusion(goalAlbedo, goalAO, 0.6);
+  const goalPad = surface(
+    goalAlbedo,
+    normalMapFrom(goalHeight, 1.2),
+    packORM(
+      goalAO,
+      grayCanvas((g) => {
+        g.fillStyle = gray(0.34);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        fillRing(g, 100, 114, gray(0.55));
+        fillRing(g, 47.5, 96.5, gray(0.72));
+        g.strokeStyle = gray(0.46);
+        treads(g, 2.6);
+        fillRing(g, 96.5, 99.5, gray(0.14));
+        fillRing(g, 45.5, 47.5, gray(0.14));
+        circle(g, C, C, 33, gray(0.08));
+      }, 0.45, 73),
+      grayCanvas((g) => {
+        g.fillStyle = gray(1);
+        g.fillRect(0, 0, DESIGN, DESIGN);
+        fillRing(g, 100, 114, gray(0.1));
+        fillRing(g, 47.5, 96.5, gray(0.7));
+        fillRing(g, 96.5, 99.5, gray(0));
+        fillRing(g, 45.5, 47.5, gray(0));
+        circle(g, C, C, 33, gray(0));
+      }),
+    ),
+  );
+  const goalEmissive = toTexture(draw((g) => {
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, DESIGN, DESIGN);
+    const lights = (soft: boolean) => {
+      fillRing(g, 96.5 - (soft ? 1.5 : 0), 99.5 + (soft ? 1.5 : 0), soft ? '#666' : '#fff');
+      fillRing(g, 45.5 - (soft ? 1.5 : 0), 47.5 + (soft ? 1.5 : 0), soft ? '#666' : '#fff');
+      g.strokeStyle = soft ? '#555' : '#e8e8e8';
+      padChevrons(g, soft ? 3 : 1.8);
+      g.strokeStyle = soft ? '#555' : '#cfcfcf';
+      deckSeams(g, soft ? 2.6 : 1, true);
+    };
+    g.save();
+    g.filter = 'blur(3px)';
+    lights(true);
+    g.restore();
+    lights(false);
+    const lens = g.createRadialGradient(C, C, 0, C, C, 33);
+    lens.addColorStop(0, '#ffffff');
+    lens.addColorStop(0.35, '#9a9a9a');
+    lens.addColorStop(1, '#2c2c2c');
+    g.fillStyle = lens;
+    g.beginPath(); g.arc(C, C, 33, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.5)';
+    lensRings(g, 0.8);
+  }), true);
+
+  yield 'Calibrating the portal device';
+
+  // ----- Portal device shell: a pale ceramic armour plate over a graphite lower band.
+  // Each long face gets this once, stretched 2.5:1 along the barrel, so it is drawn
+  // in a space squeezed the other way.
+  const GUN_W = DESIGN * 2.5;
+  const BAND_Y = 176;
+  const gunSpace = (g: CanvasRenderingContext2D, fn: Draw) => {
+    g.save();
+    g.scale(DESIGN / GUN_W, 1);
+    fn(g);
+    g.restore();
+  };
+  /** Panel joints: two uprights, a raked cut near the muzzle and an access hatch. */
+  const gunSeams = (g: CanvasRenderingContext2D) => {
+    g.lineWidth = 2.6;
+    g.lineJoin = 'miter';
+    g.beginPath();
+    g.moveTo(GUN_W * 0.27, 0); g.lineTo(GUN_W * 0.27, BAND_Y);
+    g.moveTo(GUN_W * 0.66, 0); g.lineTo(GUN_W * 0.66, 60); g.lineTo(GUN_W * 0.72, BAND_Y);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(GUN_W * 0.32, 44); g.lineTo(GUN_W * 0.56, 44); g.lineTo(GUN_W * 0.6, 68); g.lineTo(GUN_W * 0.6, 128);
+    g.lineTo(GUN_W * 0.32, 128);
+    g.closePath();
+    g.stroke();
+  };
+  /** Raked cooling slots near the muzzle. */
+  const gunVents = (g: CanvasRenderingContext2D) => {
+    for (let i = 0; i < 7; i++) {
+      const x = GUN_W * 0.775 + i * 17;
+      g.beginPath();
+      g.moveTo(x, 46); g.lineTo(x + 8, 46); g.lineTo(x + 22, 124); g.lineTo(x + 14, 124);
+      g.closePath();
+      g.fill();
+    }
+  };
+  const gunScrews: Array<[number, number]> = [
+    [20, 20], [GUN_W - 20, 20], [20, 152], [GUN_W - 20, 152], [GUN_W * 0.27 + 18, 20], [GUN_W * 0.27 + 18, 152],
+    [GUN_W * 0.66 - 18, 20], [GUN_W * 0.32 + 14, 58], [GUN_W * 0.32 + 14, 114], [GUN_W * 0.6 - 14, 114],
+    [60, 216], [GUN_W * 0.5, 240], [GUN_W - 60, 216],
+  ];
+  const gunHazard = (g: CanvasRenderingContext2D) => {
+    g.save();
+    g.beginPath();
+    g.rect(GUN_W * 0.045, 62, 96, 26);
+    g.clip();
+    g.fillStyle = '#eab320';
+    g.fillRect(0, 0, GUN_W, DESIGN);
+    g.fillStyle = '#20242b';
+    for (let i = -2; i < 10; i++) {
+      const x = GUN_W * 0.045 + i * 22;
+      g.beginPath();
+      g.moveTo(x, 88); g.lineTo(x + 26, 62); g.lineTo(x + 37, 62); g.lineTo(x + 11, 88);
+      g.fill();
+    }
+    g.restore();
+  };
+  const gunAlbedo = draw((g) => gunSpace(g, (g) => {
+    const grd = g.createLinearGradient(0, 0, 0, BAND_Y);
+    grd.addColorStop(0, '#d3d8de');
+    grd.addColorStop(1, '#bcc3cb');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, GUN_W, DESIGN);
+    // the access hatch is a shade darker than the plate around it
+    g.fillStyle = 'rgba(70,80,95,.16)';
+    g.beginPath();
+    g.moveTo(GUN_W * 0.32, 44); g.lineTo(GUN_W * 0.56, 44); g.lineTo(GUN_W * 0.6, 68); g.lineTo(GUN_W * 0.6, 128);
+    g.lineTo(GUN_W * 0.32, 128);
+    g.fill();
+    // graphite lower band under an amber pinstripe
+    g.fillStyle = '#22272e';
+    g.fillRect(0, BAND_Y, GUN_W, DESIGN - BAND_Y);
+    g.fillStyle = '#eab320';
+    g.fillRect(0, BAND_Y - 7, GUN_W, 4);
+    gunHazard(g);
+    g.textBaseline = 'middle';
+    g.fillStyle = '#dfe5ec';
+    g.font = '700 27px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+    g.fillText('LL  ·  PD-03  ·  APERTURE FIELD PROJECTOR', 96, 215);
+    g.fillStyle = 'rgba(223,229,236,.55)';
+    g.font = '700 12px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+    g.fillText('SN 0042-7C   ·   CLASS IV EMITTER   ·   DO NOT LOOK INTO APERTURE', 98, 239);
+    g.fillStyle = 'rgba(32,38,48,.82)';
+    g.font = '700 30px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+    g.fillText('03', GUN_W * 0.045, 124);
+    g.font = '700 13px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+    g.fillText('FIELD CELL', GUN_W * 0.34, 60);
+    g.fillText('SERVICE 07 / 26', GUN_W * 0.34, 114);
+    g.fillText('EMITTER COOLING', GUN_W * 0.775, 140);
+    // data label on the hatch
+    g.fillStyle = '#eef1f4';
+    g.fillRect(GUN_W * 0.47, 78, 62, 34);
+    g.fillStyle = '#1c2026';
+    const bars = rng(651);
+    for (let x = 0; x < 54;) { const w = 1 + Math.floor(bars() * 3); g.fillRect(GUN_W * 0.47 + 4 + x, 82, w, 18); x += w + 1 + Math.floor(bars() * 2); }
+    g.fillRect(GUN_W * 0.47 + 4, 103, 30, 4);
+    g.fillStyle = g.strokeStyle = 'rgba(24,28,34,.85)';
+    gunSeams(g);
+    g.fillStyle = '#12151a';
+    gunVents(g);
+    // paint knocked off the plate's lower edge and the panel joints
+    g.fillStyle = '#858d98';
+    chips(g, -20, BAND_Y - 9, GUN_W + 40, 200, 60, 3.4, 652);
+    chips(g, GUN_W * 0.27, -40, GUN_W * 0.39, 300, 30, 2.6, 653);
+    smudges(g, 18, 'rgba(60,62,70,.9)', 0.12, 654);
+    scratches(g, 150, '#5d646e', 0.26, 655, 90);
+    scratches(g, 60, '#ffffff', 0.3, 656, 50);
+    for (const [x, y] of gunScrews) {
+      circle(g, x, y, 6.2, '#15181d');
+      circle(g, x, y, 4.8, '#9ba4b0');
+      g.fillStyle = '#23272e';
+      g.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + x;
+        g.lineTo(x + Math.cos(a) * 2.6, y + Math.sin(a) * 2.6);
+      }
+      g.fill();
+    }
+  }));
+  addGrain(gunAlbedo, 0.05, 0.03, 61);
+  const gunHeight = heightField([
+    { mask: (g) => gunSpace(g, (g) => g.fillRect(0, 0, GUN_W, BAND_Y - 2)), bevel: 1.2, amount: 1.2 },
+    { mask: (g) => gunSpace(g, (g) => { g.strokeStyle = '#fff'; gunSeams(g); }), bevel: 1, amount: -1.6 },
+    { mask: (g) => gunSpace(g, gunVents), bevel: 1, amount: -1.8 },
+    { mask: (g) => gunSpace(g, (g) => { for (const [x, y] of gunScrews) circle(g, x, y, 6.2, '#fff'); }), bevel: 0.8, amount: -0.9 },
+    { mask: (g) => gunSpace(g, (g) => { for (const [x, y] of gunScrews) circle(g, x, y, 4.4, '#fff'); }), bevel: 1, amount: 1.3 },
+  ], 0.12, 62);
+  const gunAO = cavityAO(gunHeight, 5, 0.6);
+  bakeOcclusion(gunAlbedo, gunAO, 0.6);
+  const gun = surface(
+    gunAlbedo,
+    normalMapFrom(gunHeight, 1.1),
+    packORM(
+      gunAO,
+      grayCanvas((g) => gunSpace(g, (g) => {
+        g.fillStyle = gray(0.36);
+        g.fillRect(0, 0, GUN_W, DESIGN);
+        g.fillStyle = gray(0.46);
+        g.fillRect(0, BAND_Y, GUN_W, DESIGN - BAND_Y);
+        g.fillStyle = gray(0.28);
+        chips(g, -20, BAND_Y - 9, GUN_W + 40, 200, 60, 3.4, 652);
+        smudges(g, 20, 'rgba(255,255,255,.9)', 0.2, 657);
+        scratches(g, 150, '#ffffff', 0.4, 655, 90);
+      }), 0.35, 63),
+      grayCanvas((g) => gunSpace(g, (g) => {
+        g.fillStyle = gray(0);
+        g.fillRect(0, 0, GUN_W, DESIGN);
+        g.fillStyle = gray(0.85);
+        g.fillRect(0, BAND_Y, GUN_W, DESIGN - BAND_Y);
+        g.fillStyle = gray(1);
+        chips(g, -20, BAND_Y - 9, GUN_W + 40, 200, 60, 3.4, 652);
+        chips(g, GUN_W * 0.27, -40, GUN_W * 0.39, 300, 30, 2.6, 653);
+        for (const [x, y] of gunScrews) circle(g, x, y, 6.2, gray(1));
+      })),
+    ),
+  );
+  for (const t of [gun.map, gun.normalMap, gun.roughnessMap]) t.anisotropy = 8;
+
+  const all = [white, metal, door, cube, buttonBase, buttonCap, goalPad].flatMap((s) => [s.map, s.normalMap, s.roughnessMap]);
+  all.push(cubeEmissive, buttonBaseEmissive, buttonCapEmissive, goalEmissive);
+  const button: ButtonMaps = { base: buttonBase, baseEmissive: buttonBaseEmissive, cap: buttonCap, capEmissive: buttonCapEmissive };
+  const goal: GoalMaps = { pad: goalPad, padEmissive: goalEmissive };
+  return { gun, white, metal, door, cube, cubeEmissive, button, goal, all };
 }

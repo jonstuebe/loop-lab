@@ -1,5 +1,5 @@
 import {
-  Color, HalfFloatType, LinearFilter, Matrix4, Mesh, PlaneGeometry, type Scene, ShaderMaterial, Vector2, Vector3,
+  AdditiveBlending, Color, HalfFloatType, LinearFilter, Matrix4, Mesh, PlaneGeometry, type Scene, ShaderMaterial, Vector2, Vector3,
   WebGLRenderTarget,
 } from 'three';
 import { PORTAL_COLORS, PORTAL_HALF_H, PORTAL_HALF_W, type PortalIndex } from './config';
@@ -15,59 +15,124 @@ void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 
+const NOISE = /* glsl */ `
+float hash(vec2 p) {
+  p = fract(p * vec2(0.1031, 0.1030));
+  p += dot(p, p.yx + 33.33);
+  return fract((p.x + p.y) * p.y);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0, amp = 0.5;
+  for (int i = 0; i < 4; i++) {
+    v += amp * vnoise(p);
+    p = mat2(1.6, 1.2, -1.2, 1.6) * p + 7.3;
+    amp *= 0.5;
+  }
+  return v;
+}
+/** Thin bright veins where the noise crosses its midpoint. */
+float veins(vec2 p, float sharp) { return pow(1.0 - clamp(abs(fbm(p) - 0.5) * 7.0, 0.0, 1.0), sharp); }
+`;
+
+/** Radius of the aperture, in units of the portal's half-size. Everything outside it is energy. */
+const APERTURE = 0.82;
+
 /**
- * Swirly ring shader. The "view" variant samples a screen-space render target
- * showing what's on the other side once both portals are open.
+ * Portal surface: a turbulent plasma ring around an aperture. The "view"
+ * variant samples a screen-space render target showing what's on the other
+ * side once both portals are open, bent slightly by the heat of the rim.
  */
 function fragmentShader(withView: boolean): string {
   return /* glsl */ `
   ${withView ? 'uniform sampler2D map; uniform vec2 res; uniform float open;' : ''}
-  uniform vec3 col; uniform float time; uniform float grow;
+  uniform vec3 col; uniform float time; uniform float grow; uniform float surge;
   varying vec2 vUv;
-
-  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  ${NOISE}
 
   void main() {
     vec2 p = vUv * 2.0 - 1.0;
     float r = length(p);
     if (r > grow) discard;
     float rn = r / max(grow, 0.001);
-    float a = atan(p.y, p.x);
-    float aa = fwidth(rn) * 1.5;
+    vec2 dir = p / max(r, 1e-4);
 
-    // Closed portal: a slow, deep swirl.
-    float sw = sin(a * 3.0 + time * 3.0 - rn * 9.0) * 0.5 + 0.5;
-    float sw2 = sin(a * 5.0 - time * 2.2 + rn * 14.0) * 0.5 + 0.5;
-    vec3 c = mix(col * 0.25 + 0.03, col * 1.3 + 0.08, sw * rn);
-    c += col * sw2 * rn * 0.35;
+    // Two scales of drifting turbulence shape the rim; sampled on the
+    // direction vector so there is no seam around the ring.
+    float n1 = fbm(dir * 2.4 + vec2(time * 0.31, -time * 0.23) + rn * 1.3);
+    float n2 = fbm(dir * 6.5 + vec2(-time * 0.55, time * 0.47) + n1 * 1.7);
+    float edge = ${APERTURE.toFixed(2)} + (n1 - 0.5) * 0.045 + (n2 - 0.5) * 0.022;
+    float d = rn - edge;
+    float inside = 1.0 - smoothstep(-fwidth(d), fwidth(d), d);
+
+    // Dormant portal: a dark vortex with faint veins of energy spiralling in.
+    float twist = time * 0.45 + 2.2 / (rn + 0.3);
+    vec2 sp = mat2(cos(twist), -sin(twist), sin(twist), cos(twist)) * p;
+    float cloud = fbm(sp * 2.6 + n1);
+    float vein = veins(sp * 3.4 - time * 0.12, 7.0);
+    float depth = smoothstep(0.0, 1.0, rn);
+    vec3 c = col * (0.015 + 0.22 * cloud * cloud * depth) + col * vein * depth * depth * 0.9;
     ${withView ? `if (open > 0.5) {
-      c = texture2D(map, gl_FragCoord.xy / res).rgb;
-      // tint and brighten toward the rim so the view sits inside a field of light
-      float edge = smoothstep(0.6, 0.82, rn);
-      c = mix(c, c * 0.7 + col * 1.2, edge * edge * 0.5);
+      // Heat shimmer: the view bends more the closer it is to the rim, with a
+      // hint of colour separation.
+      float lens = smoothstep(-0.2, 0.0, d);
+      vec2 bend = (vec2(n1, n2) - 0.5) * 0.022 * lens * lens;
+      vec2 suv = gl_FragCoord.xy / res + bend;
+      c = vec3(
+        texture2D(map, suv + bend * 0.35).r,
+        texture2D(map, suv).g,
+        texture2D(map, suv - bend * 0.35).b
+      );
+      c *= 1.0 - 0.3 * lens * lens;
     }` : ''}
+    // light from the rim spilling into the aperture
+    c += col * (exp(d * 26.0) * 0.75 + exp(d * 7.0) * 0.04) * (1.0 + surge * 2.0);
 
-    // Wobbling energy rim: HDR so the bloom pass gives it a halo.
-    float wob = 0.014 * sin(a * 5.0 + time * 4.0) + 0.008 * sin(a * 11.0 - time * 6.5);
-    float band = smoothstep(0.80 + wob - aa, 0.86 + wob, rn);
-    float flicker = 0.85 + 0.3 * sin(a * 18.0 + time * 9.0) * sin(a * 7.0 - time * 5.0);
-    vec3 rimCol = col * (2.6 + 1.6 * sw) * flicker + 0.15;
-    c = mix(c, rimCol, band);
+    // Plasma: fine veins streaming outward from the rim, fading with distance.
+    float out_ = max(d, 0.0);
+    float streamA = veins(dir * 7.0 + vec2(rn * 5.0 - time * 1.1, time * 0.4), 3.0);
+    float streamB = veins(dir * 15.0 + vec2(time * 0.7, rn * 9.0 - time * 1.9), 5.0);
+    float plasma = exp(-out_ * 17.0) * (0.3 + 1.5 * streamA * n2 + 0.9 * streamB * n1);
+    plasma *= smoothstep(-0.025, 0.0, d);
+    // The core: a hair-thin, near-white line where the aperture meets the plasma.
+    float core = exp(-abs(d) * (120.0 - 60.0 * surge));
+    float soft = exp(-abs(d) * 30.0);
+    vec3 energy = col * plasma * 2.4 + col * soft * 1.6 + (col * 3.0 + vec3(1.2)) * core * 1.5;
+    energy *= 1.0 + surge * 2.5;
 
-    // bright inner seam just inside the rim
-    float seam = smoothstep(0.76 + wob - aa, 0.80 + wob, rn) * (1.0 - smoothstep(0.80 + wob, 0.835 + wob + aa, rn));
-    c = mix(c, vec3(3.2) + col * 1.5, seam * 0.9);
-
-    // drifting sparks in the rim
-    vec2 cell = vec2(floor((a + 3.1416) * 9.0 + time * 1.7), floor(rn * 14.0 - time * 3.0));
-    float spark = step(0.93, hash(cell)) * band;
-    c += col * spark * 3.0;
-
-    // anti-aliased outer edge
-    float alpha = 1.0 - smoothstep(1.0 - aa * 1.5, 1.0, rn);
+    float lum = max(energy.r, max(energy.g, energy.b));
+    float fade = 1.0 - smoothstep(0.9, 1.0, rn);
+    float alpha = max(inside, clamp(lum * 0.9, 0.0, 1.0) * fade);
+    c = mix(energy, c + energy, inside);
     gl_FragColor = vec4(c, alpha);
   }`;
 }
+
+/** How much larger than the portal the wall-glow quad is. */
+const HALO_SCALE = 1.9;
+
+/** Additive glow and drifting wisps on the wall around the portal. */
+const HALO_FRAGMENT = /* glsl */ `
+uniform vec3 col; uniform float time; uniform float grow; uniform float surge;
+varying vec2 vUv;
+${NOISE}
+void main() {
+  vec2 p = (vUv * 2.0 - 1.0) * ${HALO_SCALE.toFixed(2)};
+  float r = length(p);
+  float rn = r / max(grow, 0.001);
+  vec2 dir = p / max(r, 1e-4);
+  float d = max(rn - ${APERTURE.toFixed(2)}, 0.0);
+  float n = fbm(dir * 3.0 + vec2(rn * 2.2 - time * 0.5, time * 0.2));
+  float wisp = veins(dir * 5.0 + vec2(rn * 3.0 - time * 0.8, -time * 0.3), 4.0);
+  float glow = exp(-d * 3.4) * 0.13 + exp(-d * 9.0) * 0.5 * (0.5 + n) + exp(-d * 6.0) * wisp * n * 0.55;
+  glow *= smoothstep(${(APERTURE - 0.06).toFixed(2)}, ${(APERTURE + 0.03).toFixed(2)}, rn);
+  glow *= 1.0 - smoothstep(${(HALO_SCALE * 0.55).toFixed(2)}, ${(HALO_SCALE * 0.98).toFixed(2)}, r);
+  gl_FragColor = vec4(col * glow * (1.0 + surge * 2.0) * grow, 1.0);
+}`;
 
 export class Portal {
   readonly color: number;
@@ -80,7 +145,9 @@ export class Portal {
   readonly flatMaterial: ShaderMaterial;
   readonly mesh: Mesh<PlaneGeometry, ShaderMaterial>;
   private readonly grow = { value: 0 };
-  /** Progress (0–1) of the squash-and-stretch pop when placed. */
+  /** Energy burst right after placement: 1 → 0. */
+  private readonly surge = { value: 0 };
+  /** Progress (0–1) of the opening animation. */
   private popAnim = 1;
   /** Mesh matrix without the pop scaling. */
   private readonly baseMatrix = new Matrix4();
@@ -109,18 +176,34 @@ export class Portal {
         col: { value: col },
         time,
         grow: this.grow,
+        surge: this.surge,
       },
       transparent: true,
     });
     this.flatMaterial = new ShaderMaterial({
       vertexShader: VERTEX_SHADER,
       fragmentShader: fragmentShader(false),
-      uniforms: { col: { value: col }, time, grow: this.grow },
+      uniforms: { col: { value: col }, time, grow: this.grow, surge: this.surge },
       transparent: true,
     });
     this.mesh = new Mesh(new PlaneGeometry(PORTAL_HALF_W * 2, PORTAL_HALF_H * 2), this.viewMaterial);
     this.mesh.matrixAutoUpdate = false;
     this.mesh.visible = false;
+    this.mesh.renderOrder = 1;
+
+    const halo = new Mesh(
+      new PlaneGeometry(PORTAL_HALF_W * 2 * HALO_SCALE, PORTAL_HALF_H * 2 * HALO_SCALE),
+      new ShaderMaterial({
+        vertexShader: VERTEX_SHADER,
+        fragmentShader: HALO_FRAGMENT,
+        uniforms: { col: { value: col }, time, grow: this.grow, surge: this.surge },
+        transparent: true,
+        blending: AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    halo.position.z = -0.006;
+    this.mesh.add(halo);
   }
 
   set(center: Vector3, right: Vector3, up: Vector3, normal: Vector3, host: Block): void {
@@ -167,11 +250,14 @@ export class Portal {
 
   animate(dt: number): void {
     if (!this.placed) return;
-    this.grow.value = Math.min(1, this.grow.value + dt * 7);
     if (this.popAnim < 1) {
-      this.popAnim = Math.min(1, this.popAnim + dt * 2.2);
-      const s = Math.sin(this.popAnim * Math.PI * 3) * (1 - this.popAnim) * 0.32;
-      Portal._scale.makeScale(1 + s, 1 - s * 0.8, 1);
+      this.popAnim = Math.min(1, this.popAnim + dt * 1.8);
+      // The aperture tears open fast, then eases out; the rim burns hot and settles.
+      const t = Math.min(1, this.popAnim * 2.4);
+      this.grow.value = 1 - (1 - t) ** 3;
+      this.surge.value = (1 - this.popAnim) ** 2;
+      const s = 1 + Math.sin(this.popAnim * Math.PI) * (1 - this.popAnim) * 0.06;
+      Portal._scale.makeScale(s, s, 1);
       this.mesh.matrix.copy(this.baseMatrix).multiply(Portal._scale);
       this.mesh.matrixWorldNeedsUpdate = true;
     }

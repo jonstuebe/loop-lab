@@ -53,14 +53,17 @@ src/
   input.ts              keyboard, mouse/pointer-lock and touch controls
   render/
     stage.ts            renderer, tone mapping, scene, cameras and lighting
-    post.ts             post-processing: MSAA, ambient occlusion, bloom
-    textures.ts         procedural colour, normal and roughness maps
-    geometry.ts         tiled and rounded box geometry helpers
+    post.ts             post-processing: MSAA, ambient occlusion, bloom, film grade
+    textures.ts         procedural colour, normal and packed AO/roughness/metal maps
+    materials.ts        surface material: panel variation, grime, room reflections
+    decals.ts           grime, light strip, chamber sign and wall detail textures
+    geometry.ts         world-aligned and rounded box geometry helpers
     gun.ts              the view-model portal device
     effects.ts          tracers, impact rings, sparks and scorch marks
     particles.ts        pooled additive particle system
   world/
     world.ts            level blocks, rooms and ray casts against them
+    dressing.ts         ceiling light strips, wall details and chamber signs
     levels.ts           hand-built training chambers
     frame.ts            rotates/mirrors a chamber layout into one of eight orientations
     solver.ts           headless playthrough harness (validates daily chambers; used by tests)

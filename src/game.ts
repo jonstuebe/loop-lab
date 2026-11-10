@@ -1,5 +1,5 @@
 import {
-  Frustum, type Material, Matrix4, Mesh, MeshStandardMaterial, PCFShadowMap, Plane, Sphere, Vector2, Vector3,
+  Color, Frustum, type Material, Matrix4, Mesh, MeshStandardMaterial, PCFShadowMap, Plane, Sphere, Vector2, Vector3,
 } from 'three';
 import {
   EYE_HEIGHT, GRAVITY, HOLD_DISTANCE, isTouch, JUMP_SPEED, KILL_Y, MAX_FALL_SPEED, QUALITY, type PortalIndex,
@@ -11,16 +11,19 @@ import { currentStreak, loadProgress, type Progress, recordClear } from './daily
 import { Input } from './input';
 import { type Body, overlaps, physicsStep, rayBox } from './physics';
 import { PortalSystem } from './portals';
+import { createGrimeTexture } from './render/decals';
 import { Effects } from './render/effects';
 import { Gun } from './render/gun';
+import { surfaceMaterial, surfaceUniforms } from './render/materials';
 import { PostFX } from './render/post';
 import { createStage, type Stage } from './render/stage';
-import { createTextures, type GameTextures } from './render/textures';
+import type { GameTextures } from './render/textures';
 import { Hud } from './ui/hud';
 import { type CardSpec, Overlay } from './ui/overlay';
+import { Dressing } from './world/dressing';
 import { type LevelDef, LEVELS } from './world/levels';
 import { animateCube, ButtonProp, CUBE_SIZE, createCubeMesh, GoalProp, type Spring, springStep } from './world/props';
-import { type Block, type Collider, type Surface, World } from './world/world';
+import { type Block, type Collider, type Surface, type SurfaceMaterial, World } from './world/world';
 
 type GameState = 'menu' | 'play' | 'done' | 'settings';
 
@@ -49,20 +52,27 @@ const JUMP_BUFFER = 0.15;
 const DOOR_HEIGHT = 2.6;
 /** Max simulation step; longer frames are subdivided so fast falls don't tunnel. */
 const MAX_SUBSTEP = 0.0085;
+/** Peak brightness of the coloured light an open portal throws on the room. */
+const PORTAL_GLOW = 7;
+const GOAL_GLOW = 4;
+const BUTTON_RED = new Color(0xff4a3a);
+const BUTTON_GREEN = new Color(0x4fe3a1);
 
 export class Game {
   private readonly stage: Stage;
   private readonly post: PostFX;
   private readonly textures: GameTextures;
-  private readonly materials: Record<Surface, MeshStandardMaterial>;
+  private readonly materials: Record<Surface, SurfaceMaterial>;
+  private readonly dressing: Dressing;
   private readonly world: World;
   private readonly portals: PortalSystem;
-  private readonly gun = new Gun();
+  private readonly gun: Gun;
   private readonly effects: Effects;
   private readonly hud = new Hud();
   private readonly overlay = new Overlay();
   private readonly input: Input;
   private readonly cubeMesh: ReturnType<typeof createCubeMesh>;
+  private readonly propSteelMaterial = new MeshStandardMaterial({ color: 0x4d5663, roughness: 0.36, metalness: 1 });
 
   private readonly player: Body = {
     pos: new Vector3(), vel: new Vector3(), half: PLAYER_HALF.clone(), onGround: false, isPlayer: true,
@@ -98,17 +108,35 @@ export class Game {
   private fpsTime = 0;
   private fpsFrames = 0;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, textures: GameTextures) {
     this.stage = createStage(canvas);
     const { scene, camera } = this.stage;
     this.post = new PostFX(this.stage.renderer, scene, camera);
 
-    this.textures = createTextures();
+    this.textures = textures;
+    this.gun = new Gun(this.textures.gun);
+    surfaceUniforms.grimeMap.value = createGrimeTexture();
+    const { white, metal, door } = this.textures;
+    // Box faces in three.js order: +x, −x, +y (walked on), −y (overhead), +z, −z.
+    const faces = (wall: Material, floor: Material, ceiling: Material) => [wall, wall, floor, ceiling, wall, wall];
+    const creamWall = surfaceMaterial({ ...white, metalness: 1, roughness: 1 }, { grime: 0.5, tileVariation: 1 });
+    const steelWall = surfaceMaterial({ ...metal, metalness: 1, roughness: 1 }, { grime: 0.75, tileVariation: 1 });
     this.materials = {
-      white: new MeshStandardMaterial({ ...this.textures.white, roughness: 1, metalness: 0, envMapIntensity: 0.6 }),
-      metal: new MeshStandardMaterial({ ...this.textures.metal, roughness: 1, metalness: 0.15, envMapIntensity: 0.9 }),
-      door: new MeshStandardMaterial({ ...this.textures.door, roughness: 1, metalness: 0, envMapIntensity: 0.7 }),
+      white: faces(
+        creamWall,
+        // Floors are polished by foot traffic, so they mirror the ceiling lights.
+        surfaceMaterial({ ...white, metalness: 1, roughness: 0.72 }, { grime: 0.85, tileVariation: 1 }),
+        creamWall,
+      ),
+      metal: faces(
+        steelWall,
+        surfaceMaterial({ ...metal, metalness: 1, roughness: 0.8 }, { grime: 1, tileVariation: 1 }),
+        // Ceilings sit back in shadow so the light strips carry the eye.
+        surfaceMaterial({ ...metal, metalness: 1, roughness: 1, color: 0x8f98a6 }, { grime: 0.6, tileVariation: 1 }),
+      ),
+      door: surfaceMaterial({ ...door, metalness: 1, roughness: 1 }, { grime: 0.35 }),
     };
+    this.dressing = new Dressing();
     this.world = new World(this.materials);
     scene.add(this.world.group);
 
@@ -195,7 +223,7 @@ export class Game {
       this.cubeMesh.rotation.set(0, 0, 0);
     }
     if (setup.button) {
-      const prop = new ButtonProp(this.gun.darkMaterial);
+      const prop = new ButtonProp(this.propSteelMaterial, this.textures.button);
       prop.group.position.set(...setup.button);
       this.world.add(prop.group);
       this.button = { pos: new Vector3(...setup.button), prop };
@@ -203,12 +231,20 @@ export class Game {
     if (setup.door) {
       this.door = { block: setup.door, t: 0, baseY: setup.door.mesh.position.y };
     }
-    const goal = new GoalProp();
+    const goal = new GoalProp(this.propSteelMaterial, this.textures.goal);
     goal.group.position.set(...setup.goal);
     this.world.add(goal.group);
     this.goal = { pos: new Vector3(...setup.goal), prop: goal };
 
+    const spawn = new Vector3(...setup.spawn);
+    // Daily chambers are numbered by day and have no fixed total; training chambers count up to the last one.
+    const s = this.session;
+    if (s.kind === 'daily') this.dressing.apply(this.world, s.day - 1, 0, level.name, spawn, setup.yaw);
+    else this.dressing.apply(this.world, s.index, LEVELS.length, level.name, spawn, setup.yaw);
+
     this.fitShadowToLevel();
+    this.placeGlowLights();
+    this.captureProbe(spawn);
     this.hud.showLevel(this.sessionLabel(), level.name, level.hint);
     this.hud.setTime(this.session.kind === 'daily' ? this.runTime : null);
     this.updateCrosshair();
@@ -220,7 +256,7 @@ export class Game {
     const bounds = this.world.bounds();
     const center = bounds.getCenter(new Vector3());
     const radius = bounds.getSize(new Vector3()).length() / 2;
-    sun.position.copy(center).add(new Vector3(0.42, 1, 0.3).normalize().multiplyScalar(radius + 10));
+    sun.position.copy(center).add(new Vector3(0.24, 1, 0.17).normalize().multiplyScalar(radius + 10));
     sun.target.position.copy(center);
     sun.target.updateMatrixWorld();
     const cam = sun.shadow.camera;
@@ -231,6 +267,28 @@ export class Game {
     cam.near = 1;
     cam.far = 2 * radius + 25;
     cam.updateProjectionMatrix();
+  }
+
+  /** Parks the exit and button lights for this level. */
+  private placeGlowLights(): void {
+    const { goalLight, buttonLight } = this.stage;
+    if (this.goal) goalLight.position.copy(this.goal.pos).setY(this.goal.pos.y + 1.1);
+    goalLight.color.setHex(0x6dffc0);
+    goalLight.intensity = GOAL_GLOW;
+    if (this.button) buttonLight.position.copy(this.button.pos).setY(this.button.pos.y + 0.55);
+    buttonLight.intensity = 0;
+  }
+
+  /** Re-captures reflections and bounce light for the freshly built level. */
+  private captureProbe(spawn: Vector3): void {
+    const room = this.world.bounds();
+    // Shrink to the inside faces of the outer walls, which are one unit thick.
+    for (const k of ['x', 'y', 'z'] as const) {
+      if (room.max[k] - room.min[k] > 3) { room.min[k] += 1; room.max[k] -= 1; }
+    }
+    const position = spawn.clone().setY(spawn.y + 1.7).clamp(room.min, room.max);
+    this.stage.scene.updateMatrixWorld(true);
+    this.stage.captureProbe(position, room, [this.gun.group, this.cubeMesh, ...this.portals.list.map((p) => p.mesh)]);
   }
 
   // ---------- player actions ----------
@@ -256,6 +314,8 @@ export class Game {
     const hit = this.world.raycast(origin, dir);
     const color = this.portals.list[index].color;
     this.gun.fire(color);
+    this.stage.muzzleLight.color.setHex(color);
+    this.stage.muzzleLight.intensity = 9;
 
     const end = origin.clone().addScaledVector(dir, hit ? hit.t : 60);
     this.stage.camera.updateMatrixWorld();
@@ -686,8 +746,11 @@ export class Game {
       t.needsUpdate = true;
     }
     // Shadow settings are compiled into shaders, so every material must recompile.
+    for (const light of [...this.stage.portalLights, this.stage.goalLight, this.stage.buttonLight, this.stage.muzzleLight]) {
+      light.visible = q.glowLights;
+    }
     const materials = new Set<Material>([
-      ...Object.values(this.materials), ...this.gun.materials, this.cubeMesh.material,
+      ...Object.values(this.materials).flat(), ...this.gun.materials, this.cubeMesh.material,
     ]);
     scene.traverse((o) => {
       if (o instanceof Mesh) {
@@ -756,12 +819,33 @@ export class Game {
     this.button?.prop.animate(dt);
     if (this.door) this.door.block.mesh.position.y = this.door.baseY + this.door.t * DOOR_HEIGHT;
     this.goal?.prop.animate(this.time);
+    this.animateGlowLights(dt);
 
     springStep(this.dip, 0, 140, 11, dt);
     this.dip.x = Math.max(-0.3, this.dip.x);
     const p = this.player;
     this.gun.animate(dt, p.onGround ? Math.hypot(p.vel.x, p.vel.z) : 0, this.dip.x);
     this.hud.update(dt);
+  }
+
+  private animateGlowLights(dt: number): void {
+    const { portalLights, goalLight, buttonLight, muzzleLight } = this.stage;
+    this.portals.list.forEach((portal, i) => {
+      const light = portalLights[i];
+      const target = portal.placed ? PORTAL_GLOW * (0.92 + 0.08 * Math.sin(this.time * 7 + i * 2)) : 0;
+      light.intensity += (target - light.intensity) * (1 - Math.exp(-10 * dt));
+      if (portal.placed) {
+        light.color.setHex(portal.color);
+        light.position.copy(portal.center).addScaledVector(portal.normal, 0.7);
+      }
+    });
+    goalLight.intensity = GOAL_GLOW * (0.85 + 0.15 * Math.sin(this.time * 3));
+    if (this.button) {
+      const pressed = this.button.prop.pressed;
+      buttonLight.color.copy(pressed ? BUTTON_GREEN : BUTTON_RED);
+      buttonLight.intensity += ((pressed ? 5 : 1.6) - buttonLight.intensity) * (1 - Math.exp(-12 * dt));
+    }
+    muzzleLight.intensity *= Math.exp(-16 * dt);
   }
 
   private readonly frustum = new Frustum();
@@ -813,7 +897,7 @@ export class Game {
       b.mesh.material = b.viewMaterial;
       this.gun.group.visible = true;
     }
-    this.post.render();
+    this.post.render(this.time);
   }
 }
 

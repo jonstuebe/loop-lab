@@ -1,10 +1,12 @@
 import {
-  AmbientLight, BackSide, BoxGeometry, Color, DirectionalLight, Float32BufferAttribute, Fog,
-  HemisphereLight, Mesh, NeutralToneMapping, MeshBasicMaterial, PerspectiveCamera, PMREMGenerator, Scene, SphereGeometry,
-  SRGBColorSpace, WebGLRenderer,
+  BackSide, type Box3, BoxGeometry, Color, DirectionalLight, Float32BufferAttribute, FogExp2,
+  HemisphereLight, Mesh, NeutralToneMapping, MeshBasicMaterial, type Object3D, PerspectiveCamera, PMREMGenerator, PointLight, Scene,
+  SphereGeometry, SRGBColorSpace, type Texture, type Vector3, type WebGLCubeRenderTarget, WebGLRenderer,
 } from 'three';
+import { surfaceUniforms } from './materials';
 
-const HAZE = 0xf3dcc6;
+/** Cool, dim haze: distance fades into it and bottomless pits fall away into it. */
+const HAZE = 0x1b2430;
 const FOV = 72;
 const NEAR = 0.02;
 const FAR = 160;
@@ -18,6 +20,19 @@ export interface Stage {
   portalCamera: PerspectiveCamera;
   /** The shadow-casting key light. */
   sun: DirectionalLight;
+  /** Coloured glow cast by each open portal onto the room around it. */
+  portalLights: [PointLight, PointLight];
+  /** Glow of the exit pad. */
+  goalLight: PointLight;
+  /** Glow of the pressure button. */
+  buttonLight: PointLight;
+  /** Brief flash at the gun's muzzle; parented to the camera. */
+  muzzleLight: PointLight;
+  /**
+   * Captures the level's own reflections and bounce light from `position`,
+   * replacing the generic studio environment. `hidden` objects are left out.
+   */
+  captureProbe(position: Vector3, room: Box3, hidden: readonly Object3D[]): void;
 }
 
 export function createStage(canvas: HTMLCanvasElement): Stage {
@@ -34,7 +49,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
 
   const scene = new Scene();
   scene.background = new Color(HAZE);
-  scene.fog = new Fog(HAZE, 40, 120);
+  scene.fog = new FogExp2(HAZE, 0.011);
 
   const aspect = window.innerWidth / window.innerHeight;
   const camera = new PerspectiveCamera(FOV, aspect, NEAR, FAR);
@@ -42,29 +57,70 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   scene.add(camera);
   const portalCamera = new PerspectiveCamera(FOV, aspect, NEAR, FAR);
 
-  scene.environment = createStudioEnvironment(renderer);
-  scene.environmentIntensity = 0.8;
+  const studio = createStudioEnvironment(renderer);
+  scene.environment = studio;
+  scene.environmentIntensity = STUDIO_INTENSITY;
 
-  scene.add(new HemisphereLight(0xdcecff, 0xf0c8a0, 0.75));
-  scene.add(new AmbientLight(0xfff4e6, 0.15));
+  // A little sky/ground fill; most ambient light comes from the level probe.
+  scene.add(new HemisphereLight(0xe6edff, 0xd8c3a8, 0.5));
 
-  const sun = new DirectionalLight(0xffe4c0, 1.9);
+  // Key light: steep and warm-white, as if from the ceiling strips.
+  const sun = new DirectionalLight(0xfff0dc, 2.5);
   sun.shadow.bias = -0.0003;
   sun.shadow.normalBias = 0.03;
   scene.add(sun, sun.target);
 
-  const fill = new DirectionalLight(0xa8ccff, 0.55);
-  fill.position.set(-6, 3, -9);
-  scene.add(fill);
+  const point = (range: number) => {
+    const light = new PointLight(0xffffff, 0, range, 1.6);
+    scene.add(light);
+    return light;
+  };
+  const portalLights: [PointLight, PointLight] = [point(9), point(9)];
+  const goalLight = point(5.5);
+  const buttonLight = point(5);
+  const muzzleLight = new PointLight(0xffffff, 0, 7, 1.8);
+  muzzleLight.position.set(0.2, -0.15, -0.9);
+  camera.add(muzzleLight);
 
-  return { renderer, scene, camera, portalCamera, sun };
+  const pmrem = new PMREMGenerator(renderer);
+  let probe: WebGLCubeRenderTarget | null = null;
+  const captureProbe = (position: Vector3, room: Box3, hidden: readonly Object3D[]) => {
+    const wasVisible = hidden.map((o) => o.visible);
+    for (const o of hidden) o.visible = false;
+    surfaceUniforms.probeOn.value = 0;
+    scene.environment = studio;
+    scene.environmentIntensity = STUDIO_INTENSITY;
+    let previous = probe;
+    // Two passes: the second sees surfaces already lit by the first, i.e. one extra bounce.
+    for (let pass = 0; pass < 2; pass++) {
+      if (renderer.shadowMap.enabled) renderer.shadowMap.needsUpdate = true;
+      const target = pmrem.fromScene(scene, 0, 0.1, FAR, { size: 256, position });
+      previous?.dispose();
+      previous = target;
+      scene.environment = target.texture;
+      scene.environmentIntensity = PROBE_INTENSITY;
+    }
+    probe = previous;
+    surfaceUniforms.probeMin.value.copy(room.min);
+    surfaceUniforms.probeMax.value.copy(room.max);
+    surfaceUniforms.probePos.value.copy(position);
+    surfaceUniforms.probeOn.value = 1;
+    hidden.forEach((o, i) => { o.visible = wasVisible[i]; });
+  };
+
+  return { renderer, scene, camera, portalCamera, sun, portalLights, goalLight, buttonLight, muzzleLight, captureProbe };
 }
+
+/** Strength of the generic studio environment, used until a level probe exists. */
+const STUDIO_INTENSITY = 0.55;
+/** Strength of the captured level probe as ambient light and reflections. */
+const PROBE_INTENSITY = 1.25;
 
 /**
  * A warm "studio" environment: a sky-to-floor gradient plus a few bright
  * softboxes, so glossy surfaces pick up crisp highlights instead of a flat sheen.
  */
-function createStudioEnvironment(renderer: WebGLRenderer) {
+function createStudioEnvironment(renderer: WebGLRenderer): Texture {
   const envScene = new Scene();
   const geo = new SphereGeometry(10, 48, 24);
   const pos = geo.attributes.position;

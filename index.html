@@ -6,68 +6,26 @@
   <title>Loop Lab</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <meta name="theme-color" content="#fbefe2" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#1e1a2c" media="(prefers-color-scheme: dark)">
-  <!-- Preloader styles are inline so it paints before any script or stylesheet arrives. -->
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <meta name="theme-color" content="#06090e">
   <style>
-    html,body{margin:0;height:100%;background:#fbefe2}
-    #preloader{--pl-bg:#fbefe2;--pl-ink:#2c2442;--pl-muted:#6d6483;--pl-track:rgba(44,36,66,.12);
-      position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;
-      background:radial-gradient(120% 90% at 50% 40%,#fff8ef 0%,var(--pl-bg) 60%);color:var(--pl-ink);
-      font-family:"Fredoka","Nunito",ui-rounded,"Arial Rounded MT Bold",system-ui,sans-serif;
-      transition:opacity .5s ease,visibility .5s;user-select:none;-webkit-user-select:none}
-    @media (prefers-color-scheme: dark){
-      html,body{background:#1e1a2c}
-      #preloader{--pl-bg:#1e1a2c;--pl-ink:#fbf3e8;--pl-muted:#b8afca;--pl-track:rgba(251,243,232,.14);
-        background:radial-gradient(120% 90% at 50% 40%,#2a2440 0%,var(--pl-bg) 60%)}
-    }
-    #preloader.gone{opacity:0;visibility:hidden;pointer-events:none}
-    .pl-box{display:flex;flex-direction:column;align-items:center;gap:22px;width:min(320px,100%)}
-    .pl-scene{position:relative;width:240px;height:84px}
-    .pl-portal{position:absolute;top:6px;width:26px;height:72px;border-radius:50%;box-sizing:border-box}
-    .pl-portal::after{content:"";position:absolute;inset:-7px;border-radius:50%;opacity:.45;filter:blur(8px);background:currentColor;
-      animation:pl-glow 1.6s ease-in-out infinite}
-    .pl-portal.b{left:78px;color:#3aa0ff;border:5px solid #3aa0ff;background:rgba(58,160,255,.18)}
-    .pl-portal.o{left:136px;color:#ff8c2a;border:5px solid #ff8c2a;background:rgba(255,140,42,.18)}
-    .pl-portal.o::after{animation-delay:.8s}
-    .pl-lane{position:absolute;top:0;height:84px;overflow:hidden}
-    .pl-lane.in{left:0;width:91px}
-    .pl-lane.out{left:149px;width:91px}
-    .pl-cube{position:absolute;top:47px;width:22px;height:22px;border-radius:6px;background:#b8c4d6;
-      box-shadow:inset 0 -4px 0 rgba(44,36,66,.18),0 3px 0 rgba(44,36,66,.12)}
-    .pl-cube::after{content:"";position:absolute;inset:7px;border-radius:50%;background:#ff8c2a;opacity:.85}
-    .pl-lane.in .pl-cube{animation:pl-in 1.6s cubic-bezier(.45,0,.75,.6) infinite}
-    .pl-lane.out .pl-cube{animation:pl-out 1.6s cubic-bezier(.25,.4,.55,1) infinite}
-    .pl-title{font-weight:700;font-size:40px;line-height:1;letter-spacing:.2px}
-    .pl-bar{width:100%;height:10px;border-radius:999px;background:var(--pl-track);overflow:hidden}
-    .pl-fill{height:100%;width:6%;border-radius:999px;background:linear-gradient(90deg,#3aa0ff,#ff8c2a);transition:width .45s ease}
-    .pl-status{font-size:16px;color:var(--pl-muted);min-height:1.4em;text-align:center}
-    .pl-status.err{color:var(--pl-ink)}
-    @keyframes pl-in{0%{transform:translateX(-30px) rotate(0)}48%{transform:translateX(96px) rotate(180deg)}100%{transform:translateX(96px) rotate(180deg)}}
-    @keyframes pl-out{0%,50%{transform:translateX(-26px) rotate(0)}100%{transform:translateX(100px) rotate(180deg)}}
-    @keyframes pl-glow{0%,100%{opacity:.25;transform:scale(.92)}50%{opacity:.6;transform:scale(1.06)}}
-    @media (prefers-reduced-motion: reduce){
-      .pl-cube,.pl-portal::after{animation:none!important}
-      .pl-lane.out .pl-cube{transform:translateX(30px)}
-      .pl-lane.in .pl-cube{transform:translateX(20px)}
-    }
+    /* Inline so the loading screen paints before the game's script and styles arrive. */
+    #preloader{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:#06090e;color:#eef2f6;
+      font-family:"Rajdhani","Barlow Condensed","DIN Alternate","Arial Narrow",system-ui,sans-serif;text-transform:uppercase;transition:opacity .45s}
+    #preloader.done{opacity:0;pointer-events:none}
+    #preloader .pre{width:min(420px,100%)}
+    #preloader h1{margin:0 0 26px;font-size:44px;line-height:1;font-weight:700;letter-spacing:.14em}
+    #preloader .ring{display:inline-block;width:.5em;height:.78em;border-radius:50%;border:.05em solid #3aa0ff;vertical-align:-.06em;margin-right:.1em;
+      box-shadow:0 0 .3em rgba(58,160,255,.7),inset 0 0 .2em rgba(58,160,255,.5)}
+    #preloader .ring.o{border-color:#ff8c2a;margin-left:-.24em;margin-right:.22em;box-shadow:0 0 .3em rgba(255,140,42,.7),inset 0 0 .2em rgba(255,140,42,.5)}
+    #preloader .track{height:3px;background:rgba(190,210,230,.16)}
+    #preBar{height:100%;width:100%;transform-origin:0 50%;transform:scaleX(0);background:linear-gradient(90deg,#3aa0ff,#ff8c2a);transition:transform .25s ease-out}
+    #preloader .row{display:flex;justify-content:space-between;gap:16px;margin-top:12px;font-size:13px;font-weight:600;letter-spacing:.2em;color:#93a0b0}
+    #prePct{color:#eef2f6;font-variant-numeric:tabular-nums}
+    #preloader.failed #preBar{background:#ff5a4d}
   </style>
 </head>
 <body>
-  <div id="preloader" role="status" aria-live="polite">
-    <div class="pl-box">
-      <div class="pl-scene" aria-hidden="true">
-        <div class="pl-lane in"><div class="pl-cube"></div></div>
-        <div class="pl-portal b"></div>
-        <div class="pl-portal o"></div>
-        <div class="pl-lane out"><div class="pl-cube"></div></div>
-      </div>
-      <div class="pl-title">Loop Lab</div>
-      <div class="pl-bar"><div class="pl-fill" id="plFill"></div></div>
-      <div class="pl-status" id="plStatus">Loading the lab…</div>
-    </div>
-  </div>
   <canvas id="c"></canvas>
 
   <div class="chip" id="chip" role="button" tabindex="0" aria-label="Chamber info">
@@ -85,7 +43,7 @@
   <button class="iconbtn" id="resetBtn" aria-label="Restart chamber" title="Restart chamber (R)">↺</button>
 
   <svg id="xhair" viewBox="0 0 44 44" aria-hidden="true">
-    <circle cx="22" cy="22" r="2.2" fill="#ffffff" stroke="#2c2442" stroke-opacity=".5" stroke-width="1"/>
+    <circle cx="22" cy="22" r="2.2" fill="#ffffff" stroke="#0a0d12" stroke-opacity=".6" stroke-width="1"/>
     <path id="xhB" d="M16 11.6 A12 12 0 0 0 16 32.4" stroke="#3aa0ff"/>
     <path id="xhO" d="M28 11.6 A12 12 0 0 1 28 32.4" stroke="#ff8c2a"/>
   </svg>
@@ -101,6 +59,14 @@
   </div>
 
   <div id="overlay"><div class="card" id="card"></div></div>
+
+  <div id="preloader" role="progressbar" aria-label="Loading Loop Lab" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <div class="pre">
+      <h1><span class="ring"></span><span class="ring o"></span> Loop Lab</h1>
+      <div class="track"><div id="preBar"></div></div>
+      <div class="row"><span id="preLabel">Loading</span><span id="prePct">0%</span></div>
+    </div>
+  </div>
 
   <script type="module" src="/src/main.ts"></script>
 </body>
