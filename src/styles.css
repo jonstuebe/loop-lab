@@ -45,7 +45,9 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 #resetBtn{right:calc(16px + env(safe-area-inset-right,0px))}
 #gearBtn{right:calc(66px + env(safe-area-inset-right,0px))}
 #gearBtn svg{width:20px;height:20px;stroke-width:1.6}
-.iconbtn:focus-visible,.cta:focus-visible,.seg button:focus-visible{outline:1px solid var(--blue);outline-offset:3px}
+.iconbtn:focus-visible,.seg button:focus-visible{outline:1px solid var(--blue);outline-offset:3px}
+/* The card's main button takes focus by itself, so it shows no ring. */
+.cta:focus-visible{outline:none}
 
 #xhair{position:fixed;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;pointer-events:none}
 #xhair circle{r:1.4px}
@@ -111,4 +113,4 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 .qnote{font-size:13.5px !important}
 @media (max-height:680px){ .card{padding:22px 26px 20px} .card h1{font-size:40px;margin-bottom:6px} .card p{font-size:14px;margin:7px 0} .keys{margin:12px 0 2px} .keys dt,.keys dd{padding:5px 0} .cta{margin-top:14px;padding:13px 18px} }
 @media (max-height:520px){ .card h1{font-size:36px} .card{padding:18px 20px} .card p{font-size:13.5px;margin:6px 0} .keys dt,.keys dd{padding:4px 0} }
-@media (prefers-reduced-motion: reduce){ #toast,#xhair path,.cta,.iconbtn{transition:none} }
+@media (prefers-reduced-motion: reduce){ #toast,#xhair path,.cta,.iconbtn,#preloader,#preBar{transition:none} }

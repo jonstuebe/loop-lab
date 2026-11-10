@@ -463,7 +463,16 @@ function surface(albedo: HTMLCanvasElement, normal: HTMLCanvasElement, orm: HTML
   return { map: toTexture(albedo, true), normalMap: toTexture(normal, false), roughnessMap: packed, metalnessMap: packed, aoMap: packed };
 }
 
-export function createTextures(): GameTextures {
+/** What the loading screen says while the first set of maps is drawn. */
+export const FIRST_TEXTURE_STAGE = 'Glazing ceramic panels';
+/** How many stages `textureSteps` runs through, counting the first. */
+export const TEXTURE_STAGES = 7;
+
+/**
+ * Draws the maps one surface at a time, yielding the name of the next stage
+ * between them so a loading screen can repaint.
+ */
+export function* textureSteps(): Generator<string, GameTextures> {
   // ----- Cream panels: portal-friendly glazed ceramic, one panel per world unit.
   const whiteStyle: TileStyle = {
     grout: '#6f685c', top: '#e4dbcc', bottom: '#dbd0bf',
@@ -517,6 +526,8 @@ export function createTextures(): GameTextures {
       for (const [x, y] of pins) circle(g, x, y, 3.2, gray(0.55));
     }, 0.3, 13), 0),
   );
+
+  yield 'Rolling steel plate';
 
   // ----- Blue steel: portal-proof painted plate, one plate per two world units.
   const metalStyle: TileStyle = {
@@ -623,6 +634,8 @@ export function createTextures(): GameTextures {
       }),
     ),
   );
+
+  yield 'Hanging blast doors';
 
   // ----- Door: a heavy painted blast door. The texture maps once onto the 2 × 2.6 slab,
   // so everything is drawn in a space squeezed horizontally to keep circles round.
@@ -737,6 +750,8 @@ export function createTextures(): GameTextures {
       })),
     ),
   );
+
+  yield 'Stamping weighted crates';
 
   // ----- Weighted crate face. The corners sit under the bumpers, so the
   // detail lives in a plus-shaped armour plate and the strips between them.
@@ -925,6 +940,8 @@ export function createTextures(): GameTextures {
     g.fillStyle = '#ffc23d';
     for (let i = 0; i < 4; i++) g.fillRect(214, 138 + i * 3, 18, 1.4);
   }), true);
+
+  yield 'Wiring pressure plates';
 
   // ----- Pressure plate. Both maps are discs that fill the square: the base
   // is seen as a ring around the cap, the cap is tinted red or green in game.
@@ -1172,6 +1189,8 @@ export function createTextures(): GameTextures {
     loadIcon(g);
   }), true);
 
+  yield 'Charging exit pads';
+
   // ----- Exit pad: a disc that fills the square. Steel rim, lettered band,
   // segmented tread deck, and a glass emitter lens in the middle.
   const padBolts = around(12, 122, Math.PI / 12);
@@ -1364,6 +1383,8 @@ export function createTextures(): GameTextures {
     g.strokeStyle = 'rgba(255,255,255,.5)';
     lensRings(g, 0.8);
   }), true);
+
+  yield 'Calibrating the portal device';
 
   // ----- Portal device shell: a pale ceramic armour plate over a graphite lower band.
   // Each long face gets this once, stretched 2.5:1 along the barrel, so it is drawn

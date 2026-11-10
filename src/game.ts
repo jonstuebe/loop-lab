@@ -14,7 +14,7 @@ import { Gun } from './render/gun';
 import { surfaceMaterial, surfaceUniforms } from './render/materials';
 import { PostFX } from './render/post';
 import { createStage, type Stage } from './render/stage';
-import { createTextures, type GameTextures } from './render/textures';
+import type { GameTextures } from './render/textures';
 import { Hud } from './ui/hud';
 import { type CardSpec, Overlay } from './ui/overlay';
 import { Dressing } from './world/dressing';
@@ -95,12 +95,12 @@ export class Game {
   private fpsTime = 0;
   private fpsFrames = 0;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, textures: GameTextures) {
     this.stage = createStage(canvas);
     const { scene, camera } = this.stage;
     this.post = new PostFX(this.stage.renderer, scene, camera);
 
-    this.textures = createTextures();
+    this.textures = textures;
     this.gun = new Gun(this.textures.gun);
     surfaceUniforms.grimeMap.value = createGrimeTexture();
     const { white, metal, door } = this.textures;

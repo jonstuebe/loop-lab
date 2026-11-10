@@ -1,11 +1,34 @@
 import './styles.css';
 import { Game } from './game';
+import { FIRST_TEXTURE_STAGE, TEXTURE_STAGES, textureSteps } from './render/textures';
+import { Preloader } from './ui/preloader';
 
 const canvas = document.getElementById('c');
 if (!(canvas instanceof HTMLCanvasElement)) throw new Error('Missing game canvas #c');
 
-const game = new Game(canvas);
-game.start();
+const preloader = new Preloader(TEXTURE_STAGES + 2);
 
-// Dev-only handle for poking at the game from the console (and for screenshots).
-if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
+async function boot(canvas: HTMLCanvasElement): Promise<void> {
+  // Every texture is drawn in code, which blocks; the loader repaints between surfaces.
+  const steps = textureSteps();
+  await preloader.begin(FIRST_TEXTURE_STAGE);
+  let step = steps.next();
+  while (!step.done) {
+    await preloader.begin(step.value);
+    step = steps.next();
+  }
+
+  await preloader.begin('Assembling the test chamber');
+  const game = new Game(canvas, step.value);
+  // Dev-only handle for poking at the game from the console (and for screenshots).
+  if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
+
+  await preloader.begin('Powering up');
+  game.start();
+  await preloader.finish();
+}
+
+boot(canvas).catch((error: unknown) => {
+  preloader.fail();
+  throw error;
+});

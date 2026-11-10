@@ -7,6 +7,22 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* Inline so the loading screen paints before the game's script and styles arrive. */
+    #preloader{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:24px;background:#06090e;color:#eef2f6;
+      font-family:"Rajdhani","Barlow Condensed","DIN Alternate","Arial Narrow",system-ui,sans-serif;text-transform:uppercase;transition:opacity .45s}
+    #preloader.done{opacity:0;pointer-events:none}
+    #preloader .pre{width:min(420px,100%)}
+    #preloader h1{margin:0 0 26px;font-size:44px;line-height:1;font-weight:700;letter-spacing:.14em}
+    #preloader .ring{display:inline-block;width:.5em;height:.78em;border-radius:50%;border:.05em solid #3aa0ff;vertical-align:-.06em;margin-right:.1em;
+      box-shadow:0 0 .3em rgba(58,160,255,.7),inset 0 0 .2em rgba(58,160,255,.5)}
+    #preloader .ring.o{border-color:#ff8c2a;margin-left:-.24em;margin-right:.22em;box-shadow:0 0 .3em rgba(255,140,42,.7),inset 0 0 .2em rgba(255,140,42,.5)}
+    #preloader .track{height:3px;background:rgba(190,210,230,.16)}
+    #preBar{height:100%;width:100%;transform-origin:0 50%;transform:scaleX(0);background:linear-gradient(90deg,#3aa0ff,#ff8c2a);transition:transform .25s ease-out}
+    #preloader .row{display:flex;justify-content:space-between;gap:16px;margin-top:12px;font-size:13px;font-weight:600;letter-spacing:.2em;color:#93a0b0}
+    #prePct{color:#eef2f6;font-variant-numeric:tabular-nums}
+    #preloader.failed #preBar{background:#ff5a4d}
+  </style>
 </head>
 <body>
   <canvas id="c"></canvas>
@@ -39,6 +55,14 @@
   </div>
 
   <div id="overlay"><div class="card" id="card"></div></div>
+
+  <div id="preloader" role="progressbar" aria-label="Loading Loop Lab" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <div class="pre">
+      <h1><span class="ring"></span><span class="ring o"></span> Loop Lab</h1>
+      <div class="track"><div id="preBar"></div></div>
+      <div class="row"><span id="preLabel">Loading</span><span id="prePct">0%</span></div>
+    </div>
+  </div>
 
   <script type="module" src="/src/main.ts"></script>
 </body>
