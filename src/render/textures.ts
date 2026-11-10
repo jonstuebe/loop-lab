@@ -1,5 +1,6 @@
 import { CanvasTexture, RepeatWrapping, SRGBColorSpace, type Texture } from 'three';
 import { isTouch } from '../config';
+import { gunMaps } from './gunmaps';
 
 /**
  * All drawing is authored on a 256 × 256 design grid and scaled up to the
@@ -432,7 +433,7 @@ export interface SurfaceMaps {
 }
 
 export interface GameTextures {
-  /** Shell of the portal device: panel seams, a trim stripe and fasteners. */
+  /** Armour of the portal device: panel seams, stencils, fasteners and wear. */
   gun: SurfaceMaps;
   white: SurfaceMaps;
   metal: SurfaceMaps;
@@ -1386,162 +1387,7 @@ export function* textureSteps(): Generator<string, GameTextures> {
 
   yield 'Calibrating the portal device';
 
-  // ----- Portal device shell: a pale ceramic armour plate over a graphite lower band.
-  // Each long face gets this once, stretched 2.5:1 along the barrel, so it is drawn
-  // in a space squeezed the other way.
-  const GUN_W = DESIGN * 2.5;
-  const BAND_Y = 176;
-  const gunSpace = (g: CanvasRenderingContext2D, fn: Draw) => {
-    g.save();
-    g.scale(DESIGN / GUN_W, 1);
-    fn(g);
-    g.restore();
-  };
-  /** Panel joints: two uprights, a raked cut near the muzzle and an access hatch. */
-  const gunSeams = (g: CanvasRenderingContext2D) => {
-    g.lineWidth = 2.6;
-    g.lineJoin = 'miter';
-    g.beginPath();
-    g.moveTo(GUN_W * 0.27, 0); g.lineTo(GUN_W * 0.27, BAND_Y);
-    g.moveTo(GUN_W * 0.66, 0); g.lineTo(GUN_W * 0.66, 60); g.lineTo(GUN_W * 0.72, BAND_Y);
-    g.stroke();
-    g.beginPath();
-    g.moveTo(GUN_W * 0.32, 44); g.lineTo(GUN_W * 0.56, 44); g.lineTo(GUN_W * 0.6, 68); g.lineTo(GUN_W * 0.6, 128);
-    g.lineTo(GUN_W * 0.32, 128);
-    g.closePath();
-    g.stroke();
-  };
-  /** Raked cooling slots near the muzzle. */
-  const gunVents = (g: CanvasRenderingContext2D) => {
-    for (let i = 0; i < 7; i++) {
-      const x = GUN_W * 0.775 + i * 17;
-      g.beginPath();
-      g.moveTo(x, 46); g.lineTo(x + 8, 46); g.lineTo(x + 22, 124); g.lineTo(x + 14, 124);
-      g.closePath();
-      g.fill();
-    }
-  };
-  const gunScrews: Array<[number, number]> = [
-    [20, 20], [GUN_W - 20, 20], [20, 152], [GUN_W - 20, 152], [GUN_W * 0.27 + 18, 20], [GUN_W * 0.27 + 18, 152],
-    [GUN_W * 0.66 - 18, 20], [GUN_W * 0.32 + 14, 58], [GUN_W * 0.32 + 14, 114], [GUN_W * 0.6 - 14, 114],
-    [60, 216], [GUN_W * 0.5, 240], [GUN_W - 60, 216],
-  ];
-  const gunHazard = (g: CanvasRenderingContext2D) => {
-    g.save();
-    g.beginPath();
-    g.rect(GUN_W * 0.045, 62, 96, 26);
-    g.clip();
-    g.fillStyle = '#eab320';
-    g.fillRect(0, 0, GUN_W, DESIGN);
-    g.fillStyle = '#20242b';
-    for (let i = -2; i < 10; i++) {
-      const x = GUN_W * 0.045 + i * 22;
-      g.beginPath();
-      g.moveTo(x, 88); g.lineTo(x + 26, 62); g.lineTo(x + 37, 62); g.lineTo(x + 11, 88);
-      g.fill();
-    }
-    g.restore();
-  };
-  const gunAlbedo = draw((g) => gunSpace(g, (g) => {
-    const grd = g.createLinearGradient(0, 0, 0, BAND_Y);
-    grd.addColorStop(0, '#d3d8de');
-    grd.addColorStop(1, '#bcc3cb');
-    g.fillStyle = grd;
-    g.fillRect(0, 0, GUN_W, DESIGN);
-    // the access hatch is a shade darker than the plate around it
-    g.fillStyle = 'rgba(70,80,95,.16)';
-    g.beginPath();
-    g.moveTo(GUN_W * 0.32, 44); g.lineTo(GUN_W * 0.56, 44); g.lineTo(GUN_W * 0.6, 68); g.lineTo(GUN_W * 0.6, 128);
-    g.lineTo(GUN_W * 0.32, 128);
-    g.fill();
-    // graphite lower band under an amber pinstripe
-    g.fillStyle = '#22272e';
-    g.fillRect(0, BAND_Y, GUN_W, DESIGN - BAND_Y);
-    g.fillStyle = '#eab320';
-    g.fillRect(0, BAND_Y - 7, GUN_W, 4);
-    gunHazard(g);
-    g.textBaseline = 'middle';
-    g.fillStyle = '#dfe5ec';
-    g.font = '700 27px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
-    g.fillText('LL  ·  PD-03  ·  APERTURE FIELD PROJECTOR', 96, 215);
-    g.fillStyle = 'rgba(223,229,236,.55)';
-    g.font = '700 12px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
-    g.fillText('SN 0042-7C   ·   CLASS IV EMITTER   ·   DO NOT LOOK INTO APERTURE', 98, 239);
-    g.fillStyle = 'rgba(32,38,48,.82)';
-    g.font = '700 30px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
-    g.fillText('03', GUN_W * 0.045, 124);
-    g.font = '700 13px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
-    g.fillText('FIELD CELL', GUN_W * 0.34, 60);
-    g.fillText('SERVICE 07 / 26', GUN_W * 0.34, 114);
-    g.fillText('EMITTER COOLING', GUN_W * 0.775, 140);
-    // data label on the hatch
-    g.fillStyle = '#eef1f4';
-    g.fillRect(GUN_W * 0.47, 78, 62, 34);
-    g.fillStyle = '#1c2026';
-    const bars = rng(651);
-    for (let x = 0; x < 54;) { const w = 1 + Math.floor(bars() * 3); g.fillRect(GUN_W * 0.47 + 4 + x, 82, w, 18); x += w + 1 + Math.floor(bars() * 2); }
-    g.fillRect(GUN_W * 0.47 + 4, 103, 30, 4);
-    g.fillStyle = g.strokeStyle = 'rgba(24,28,34,.85)';
-    gunSeams(g);
-    g.fillStyle = '#12151a';
-    gunVents(g);
-    // paint knocked off the plate's lower edge and the panel joints
-    g.fillStyle = '#858d98';
-    chips(g, -20, BAND_Y - 9, GUN_W + 40, 200, 60, 3.4, 652);
-    chips(g, GUN_W * 0.27, -40, GUN_W * 0.39, 300, 30, 2.6, 653);
-    smudges(g, 18, 'rgba(60,62,70,.9)', 0.12, 654);
-    scratches(g, 150, '#5d646e', 0.26, 655, 90);
-    scratches(g, 60, '#ffffff', 0.3, 656, 50);
-    for (const [x, y] of gunScrews) {
-      circle(g, x, y, 6.2, '#15181d');
-      circle(g, x, y, 4.8, '#9ba4b0');
-      g.fillStyle = '#23272e';
-      g.beginPath();
-      for (let k = 0; k < 6; k++) {
-        const a = (k / 6) * Math.PI * 2 + x;
-        g.lineTo(x + Math.cos(a) * 2.6, y + Math.sin(a) * 2.6);
-      }
-      g.fill();
-    }
-  }));
-  addGrain(gunAlbedo, 0.05, 0.03, 61);
-  const gunHeight = heightField([
-    { mask: (g) => gunSpace(g, (g) => g.fillRect(0, 0, GUN_W, BAND_Y - 2)), bevel: 1.2, amount: 1.2 },
-    { mask: (g) => gunSpace(g, (g) => { g.strokeStyle = '#fff'; gunSeams(g); }), bevel: 1, amount: -1.6 },
-    { mask: (g) => gunSpace(g, gunVents), bevel: 1, amount: -1.8 },
-    { mask: (g) => gunSpace(g, (g) => { for (const [x, y] of gunScrews) circle(g, x, y, 6.2, '#fff'); }), bevel: 0.8, amount: -0.9 },
-    { mask: (g) => gunSpace(g, (g) => { for (const [x, y] of gunScrews) circle(g, x, y, 4.4, '#fff'); }), bevel: 1, amount: 1.3 },
-  ], 0.12, 62);
-  const gunAO = cavityAO(gunHeight, 5, 0.6);
-  bakeOcclusion(gunAlbedo, gunAO, 0.6);
-  const gun = surface(
-    gunAlbedo,
-    normalMapFrom(gunHeight, 1.1),
-    packORM(
-      gunAO,
-      grayCanvas((g) => gunSpace(g, (g) => {
-        g.fillStyle = gray(0.36);
-        g.fillRect(0, 0, GUN_W, DESIGN);
-        g.fillStyle = gray(0.46);
-        g.fillRect(0, BAND_Y, GUN_W, DESIGN - BAND_Y);
-        g.fillStyle = gray(0.28);
-        chips(g, -20, BAND_Y - 9, GUN_W + 40, 200, 60, 3.4, 652);
-        smudges(g, 20, 'rgba(255,255,255,.9)', 0.2, 657);
-        scratches(g, 150, '#ffffff', 0.4, 655, 90);
-      }), 0.35, 63),
-      grayCanvas((g) => gunSpace(g, (g) => {
-        g.fillStyle = gray(0);
-        g.fillRect(0, 0, GUN_W, DESIGN);
-        g.fillStyle = gray(0.85);
-        g.fillRect(0, BAND_Y, GUN_W, DESIGN - BAND_Y);
-        g.fillStyle = gray(1);
-        chips(g, -20, BAND_Y - 9, GUN_W + 40, 200, 60, 3.4, 652);
-        chips(g, GUN_W * 0.27, -40, GUN_W * 0.39, 300, 30, 2.6, 653);
-        for (const [x, y] of gunScrews) circle(g, x, y, 6.2, gray(1));
-      })),
-    ),
-  );
-  for (const t of [gun.map, gun.normalMap, gun.roughnessMap]) t.anisotropy = 8;
+  const gun = gunMaps();
 
   const all = [white, metal, door, cube, buttonBase, buttonCap, goalPad].flatMap((s) => [s.map, s.normalMap, s.roughnessMap]);
   all.push(cubeEmissive, buttonBaseEmissive, buttonCapEmissive, goalEmissive);
