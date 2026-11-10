@@ -14,6 +14,7 @@ import { PortalSystem } from './portals';
 import { createGrimeTexture } from './render/decals';
 import { Effects } from './render/effects';
 import { Gun } from './render/gun';
+import type { PortalGun } from './render/gun.prototype';
 import { surfaceMaterial, surfaceUniforms } from './render/materials';
 import { PostFX } from './render/post';
 import { createStage, type Stage } from './render/stage';
@@ -66,7 +67,7 @@ export class Game {
   private readonly dressing: Dressing;
   private readonly world: World;
   private readonly portals: PortalSystem;
-  private readonly gun: Gun;
+  private gun: PortalGun;
   private readonly effects: Effects;
   private readonly hud = new Hud();
   private readonly overlay = new Overlay();
@@ -159,6 +160,13 @@ export class Game {
     this.quality = loadQuality();
     this.rtScale = QUALITY[this.quality].rt;
     window.addEventListener('resize', () => this.onResize());
+  }
+
+  /** PROTOTYPE: swaps the view-model gun for another variant. */
+  setGun(gun: PortalGun): void {
+    this.stage.camera.remove(this.gun.group);
+    this.gun = gun;
+    this.stage.camera.add(gun.group);
   }
 
   start(): void {

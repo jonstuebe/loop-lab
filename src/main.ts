@@ -1,6 +1,7 @@
 import './styles.css';
 import { Game } from './game';
 import { FIRST_TEXTURE_STAGE, TEXTURE_STAGES, textureSteps } from './render/textures';
+import { mountGunSwitcher } from './ui/gun-switcher.prototype';
 import { Preloader } from './ui/preloader';
 
 const canvas = document.getElementById('c');
@@ -22,6 +23,9 @@ async function boot(canvas: HTMLCanvasElement): Promise<void> {
   const game = new Game(canvas, step.value);
   // Dev-only handle for poking at the game from the console (and for screenshots).
   if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
+
+  // PROTOTYPE: portal gun variants, dev builds only.
+  if (import.meta.env.DEV) mountGunSwitcher(game, step.value.gun);
 
   await preloader.begin('Powering up');
   game.start();
