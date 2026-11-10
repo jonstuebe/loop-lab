@@ -1,5 +1,5 @@
 import {
-  Color, Frustum, type Material, Matrix4, Mesh, PCFShadowMap, Plane, Sphere, Vector2, Vector3,
+  Color, Frustum, type Material, Matrix4, Mesh, MeshStandardMaterial, PCFShadowMap, Plane, Sphere, Vector2, Vector3,
 } from 'three';
 import {
   EYE_HEIGHT, GRAVITY, HOLD_DISTANCE, isTouch, JUMP_SPEED, KILL_Y, MAX_FALL_SPEED, QUALITY, type PortalIndex,
@@ -66,6 +66,7 @@ export class Game {
   private readonly overlay = new Overlay();
   private readonly input: Input;
   private readonly cubeMesh: ReturnType<typeof createCubeMesh>;
+  private readonly propSteelMaterial = new MeshStandardMaterial({ color: 0x4d5663, roughness: 0.36, metalness: 1 });
 
   private readonly player: Body = {
     pos: new Vector3(), vel: new Vector3(), half: PLAYER_HALF.clone(), onGround: false, isPlayer: true,
@@ -184,7 +185,7 @@ export class Game {
       this.cubeMesh.rotation.set(0, 0, 0);
     }
     if (setup.button) {
-      const prop = new ButtonProp(this.gun.darkMaterial);
+      const prop = new ButtonProp(this.propSteelMaterial, this.textures.button);
       prop.group.position.set(...setup.button);
       this.world.add(prop.group);
       this.button = { pos: new Vector3(...setup.button), prop };
@@ -192,7 +193,7 @@ export class Game {
     if (setup.door) {
       this.door = { block: setup.door, t: 0, baseY: setup.door.mesh.position.y };
     }
-    const goal = new GoalProp();
+    const goal = new GoalProp(this.propSteelMaterial, this.textures.goal);
     goal.group.position.set(...setup.goal);
     this.world.add(goal.group);
     this.goal = { pos: new Vector3(...setup.goal), prop: goal };
