@@ -188,9 +188,10 @@ const signCache = new Map<string, CanvasTexture>();
 /**
  * The big stencilled chamber number painted on a wall near the entrance. 2:1.
  * `light` picks pale paint (for dark steel) or dark paint (for cream panels).
+ * A `total` of 0 marks a daily chamber: it is numbered by day and has no progress pips.
  */
 export function chamberSignTexture(index: number, total: number, name: string, light: boolean): Texture {
-  const key = `${index}:${light}`;
+  const key = `${index}:${total}:${name}:${light}`;
   const cached = signCache.get(key);
   if (cached) return cached;
   const W = 1024;
@@ -205,7 +206,8 @@ export function chamberSignTexture(index: number, total: number, name: string, l
   g.textBaseline = 'alphabetic';
 
   const num = String(index + 1).padStart(2, '0');
-  g.font = `700 400px ${STENCIL}`;
+  // Day numbers run past two digits, so the numeral shrinks to keep the same width.
+  g.font = `700 ${Math.round(400 * Math.min(1, 2 / num.length))}px ${STENCIL}`;
   g.fillText(num, 28, 400);
   const numW = g.measureText(num).width;
   // stencil bridges across the digits
@@ -219,7 +221,7 @@ export function chamberSignTexture(index: number, total: number, name: string, l
   const x = Math.min(numW + 78, 500);
   g.fillRect(x, 108, 8, 292);
   g.font = `700 54px ${STENCIL}`;
-  g.fillText('TEST CHAMBER', x + 34, 160);
+  g.fillText(total > 0 ? 'TEST CHAMBER' : 'DAILY CHAMBER', x + 34, 160);
   g.font = `700 92px ${STENCIL}`;
   g.fillText(name.toUpperCase(), x + 34, 258, W - x - 60);
   // progress pips
@@ -229,7 +231,7 @@ export function chamberSignTexture(index: number, total: number, name: string, l
     else { g.lineWidth = 5; g.strokeRect(px + 2.5, 298.5, 27, 27); }
   }
   g.font = `700 30px ${STENCIL}`;
-  g.fillText(`LOOP LAB  ·  SECTOR ${String.fromCharCode(65 + (index % 6))}  ·  ${num}/${String(total).padStart(2, '0')}`, x + 34, 388);
+  g.fillText(`LOOP LAB  ·  SECTOR ${String.fromCharCode(65 + (index % 6))}  ·  ${total > 0 ? `${num}/${String(total).padStart(2, '0')}` : 'DAILY'}`, x + 34, 388);
   // corner ticks
   g.lineWidth = 6;
   for (const [cx, cy, sx, sy] of [[14, 40, 1, 1], [W - 14, 40, -1, 1], [14, H - 40, 1, -1], [W - 14, H - 40, -1, -1]] as const) {

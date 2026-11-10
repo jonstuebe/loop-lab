@@ -25,6 +25,8 @@ async function boot(canvas: HTMLCanvasElement): Promise<void> {
 
   await preloader.begin('Powering up');
   game.start();
+  // Compiles the shaders up front so the first frame of play doesn't hitch.
+  await game.warmup();
   await preloader.finish();
 }
 

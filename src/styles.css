@@ -30,7 +30,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
   -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
 
 .chip{position:fixed;left:calc(16px + env(safe-area-inset-left,0px));top:calc(16px + env(safe-area-inset-top,0px));
-  max-width:min(400px,calc(100vw - 150px));border-left:2px solid var(--blue);padding:10px 16px 12px 14px;cursor:pointer}
+  max-width:min(400px,calc(100vw - 200px));border-left:2px solid var(--blue);padding:10px 16px 12px 14px;cursor:pointer}
 .chip .num{font-family:var(--display);font-weight:600;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
 .chip .name{font-family:var(--display);font-weight:700;font-size:24px;line-height:1.05;letter-spacing:.08em;text-transform:uppercase;margin:2px 0 5px}
 .chip .hint{font-size:13.5px;line-height:1.45;color:var(--muted)}
@@ -44,10 +44,11 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 .iconbtn:active{background:var(--ink);color:var(--btn-ink)}
 #resetBtn{right:calc(16px + env(safe-area-inset-right,0px))}
 #gearBtn{right:calc(66px + env(safe-area-inset-right,0px))}
-#gearBtn svg{width:20px;height:20px;stroke-width:1.6}
-.iconbtn:focus-visible,.seg button:focus-visible{outline:1px solid var(--blue);outline-offset:3px}
+#menuBtn{right:calc(116px + env(safe-area-inset-right,0px))}
+#gearBtn svg,#menuBtn svg{width:20px;height:20px;stroke-width:1.6}
+.iconbtn:focus-visible,.seg button:focus-visible,.cta.alt:focus-visible,.day:focus-visible,.howto summary:focus-visible{outline:1px solid var(--blue);outline-offset:3px}
 /* The card's main button takes focus by itself, so it shows no ring. */
-.cta:focus-visible{outline:none}
+#go:focus-visible{outline:none}
 
 #xhair{position:fixed;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;pointer-events:none}
 #xhair circle{r:1.4px}
@@ -82,10 +83,11 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 #overlay.peek{background:linear-gradient(to top,rgba(6,9,14,.6),transparent 55%);align-items:end;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px))}
 .card{position:relative;max-width:520px;width:100%;padding:30px 32px 28px;max-height:calc(100% - 20px);overflow:auto;
   border-top:2px solid var(--ink);box-shadow:0 30px 80px rgba(0,0,0,.55)}
-/* corner ticks */
-.card::before,.card::after{content:"";position:absolute;bottom:8px;width:10px;height:10px;border-bottom:1px solid var(--line-strong);pointer-events:none}
-.card::before{left:8px;border-left:1px solid var(--line-strong)}
-.card::after{right:8px;border-right:1px solid var(--line-strong)}
+/* Corner ticks, drawn as backgrounds so they stay in the corners when a long card scrolls. */
+.card{background-image:linear-gradient(var(--line-strong),var(--line-strong)),linear-gradient(var(--line-strong),var(--line-strong)),
+    linear-gradient(var(--line-strong),var(--line-strong)),linear-gradient(var(--line-strong),var(--line-strong));
+  background-size:10px 1px,1px 10px,10px 1px,1px 10px;background-repeat:no-repeat;
+  background-position:left 8px bottom 8px,left 8px bottom 8px,right 8px bottom 8px,right 8px bottom 8px}
 .card h1{font-family:var(--display);font-size:54px;line-height:.95;margin:0 0 12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
 .card h1 .ring{display:inline-block;width:.5em;height:.78em;border-radius:50%;border:.05em solid var(--blue);vertical-align:-.06em;margin-right:.1em;
   box-shadow:0 0 .3em rgba(58,160,255,.7),inset 0 0 .2em rgba(58,160,255,.5)}
@@ -111,6 +113,42 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 .qrow p{margin:6px 0}
 .fps{font-family:var(--display);font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--ink) !important;white-space:nowrap;font-variant-numeric:tabular-nums}
 .qnote{font-size:13.5px !important}
-@media (max-height:680px){ .card{padding:22px 26px 20px} .card h1{font-size:40px;margin-bottom:6px} .card p{font-size:14px;margin:7px 0} .keys{margin:12px 0 2px} .keys dt,.keys dd{padding:5px 0} .cta{margin-top:14px;padding:13px 18px} }
+
+/* Secondary card buttons */
+.cta.alt{margin-top:0;background:transparent;color:var(--ink);border-color:var(--line-strong);font-size:14px;letter-spacing:.2em;padding:13px 12px}
+.cta.alt:hover{background:var(--ink);color:var(--btn-ink);border-color:var(--ink)}
+.actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:10px}
+
+/* Daily chamber menu */
+.eyebrow{font-family:var(--display);font-size:12px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.today{margin:18px 0 8px;padding:14px 16px;background:var(--seg);border:1px solid var(--line);border-left:2px solid var(--orange)}
+.tname{font-family:var(--display);font-size:26px;font-weight:700;line-height:1.1;letter-spacing:.08em;text-transform:uppercase}
+.tnum{color:var(--muted);font-weight:600}
+.tmeta{font-size:14px;color:var(--muted);margin-top:6px}
+.tnext{font-family:var(--display);font-size:12px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-top:6px;font-variant-numeric:tabular-nums}
+.ok{color:#5bd68e;font-weight:600}
+.dim{color:var(--muted)}
+.card p.streak{font-size:13.5px;margin:10px 0}
+.card p.best{color:#5bd68e;font-weight:600;margin-top:0}
+.howto{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+.howto summary{cursor:pointer;font-family:var(--display);font-weight:600;font-size:14px;letter-spacing:.18em;text-transform:uppercase;padding:4px 0}
+.howto summary:hover{color:var(--blue)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);margin:16px 0 6px;border:1px solid var(--line);background:var(--seg)}
+.stats div{padding:12px 8px;text-align:center;border-right:1px solid var(--line)}
+.stats div:last-child{border-right:0}
+.stats b{display:block;font-family:var(--display);font-size:28px;font-weight:700;letter-spacing:.04em;font-variant-numeric:tabular-nums}
+.stats span{font-family:var(--display);font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.days{display:flex;flex-direction:column;margin-top:14px;max-height:min(46vh,420px);overflow:auto;border-top:1px solid var(--line)}
+.day{display:flex;align-items:center;gap:14px;width:100%;text-align:left;font-family:inherit;color:var(--ink);background:transparent;
+  border:0;border-bottom:1px solid var(--line);border-left:2px solid transparent;border-radius:0;padding:10px 12px;cursor:pointer;font-size:14px;
+  transition:background .12s,border-color .12s}
+.day:hover{background:var(--seg);border-left-color:var(--blue)}
+.day:focus-visible{outline-offset:-1px}
+.day .dnum{font-family:var(--display);font-weight:700;font-size:15px;letter-spacing:.08em;color:var(--muted);min-width:2.6em;font-variant-numeric:tabular-nums}
+.day .dname{flex:1;font-family:var(--display);font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;display:flex;flex-direction:column;line-height:1.15}
+.day .dname small{font-family:var(--body);font-weight:400;font-size:12.5px;letter-spacing:0;text-transform:none;color:var(--muted);margin-top:2px}
+.day .ok,.day .dim{font-family:var(--display);font-size:13px;letter-spacing:.12em;text-transform:uppercase;font-variant-numeric:tabular-nums;white-space:nowrap}
+.day.done .dname{color:var(--muted)}
+@media (max-height:800px){ .today{margin:12px 0 4px;padding:10px 14px} .howto{margin-top:8px;padding-top:6px} .card{padding:22px 26px 20px} .card h1{font-size:40px;margin-bottom:6px} .card p{font-size:14px;margin:7px 0} .keys{margin:12px 0 2px} .keys dt,.keys dd{padding:5px 0} .cta{margin-top:14px;padding:13px 18px} }
 @media (max-height:520px){ .card h1{font-size:36px} .card{padding:18px 20px} .card p{font-size:13.5px;margin:6px 0} .keys dt,.keys dd{padding:4px 0} }
-@media (prefers-reduced-motion: reduce){ #toast,#xhair path,.cta,.iconbtn,#preloader,#preBar{transition:none} }
+@media (prefers-reduced-motion: reduce){ #toast,#xhair path,.cta,.iconbtn,.day,#preloader,#preBar{transition:none} }
