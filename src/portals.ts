@@ -44,27 +44,32 @@ function fragmentShader(withView: boolean): string {
       c = texture2D(map, gl_FragCoord.xy / res).rgb;
       // tint and brighten toward the rim so the view sits inside a field of light
       float edge = smoothstep(0.6, 0.82, rn);
-      c = mix(c, c * 0.7 + col * 1.2, edge * edge * 0.5);
+      c = mix(c, c * 0.75 + col * 0.7, edge * edge * 0.45);
     }` : ''}
 
-    // Wobbling energy rim: HDR so the bloom pass gives it a halo.
+    // Wobbling energy rim: hottest at its inner edge, licking outward like a flame.
+    // HDR, so the bloom pass gives it a halo.
     float wob = 0.014 * sin(a * 5.0 + time * 4.0) + 0.008 * sin(a * 11.0 - time * 6.5);
     float band = smoothstep(0.80 + wob - aa, 0.86 + wob, rn);
-    float flicker = 0.85 + 0.3 * sin(a * 18.0 + time * 9.0) * sin(a * 7.0 - time * 5.0);
-    vec3 rimCol = col * (2.6 + 1.6 * sw) * flicker + 0.15;
+    float t = clamp((rn - 0.84 - wob) / 0.16, 0.0, 1.0);
+    float flame = 0.5 + 0.5 * sin(a * 9.0 + time * 5.0 + 2.0 * sin(a * 4.0 - time * 3.0));
+    float lick = 0.5 + 0.5 * sin(a * 23.0 - time * 7.0 + 3.0 * sin(a * 6.0 + time * 2.0));
+    vec3 rimCol = col * (0.45 + 2.3 * pow(1.0 - t, 1.7)) * (0.75 + 0.5 * flame);
     c = mix(c, rimCol, band);
 
     // bright inner seam just inside the rim
     float seam = smoothstep(0.76 + wob - aa, 0.80 + wob, rn) * (1.0 - smoothstep(0.80 + wob, 0.835 + wob + aa, rn));
-    c = mix(c, vec3(3.2) + col * 1.5, seam * 0.9);
+    c = mix(c, vec3(0.9) + col * 3.0, seam * 0.9);
 
     // drifting sparks in the rim
     vec2 cell = vec2(floor((a + 3.1416) * 9.0 + time * 1.7), floor(rn * 14.0 - time * 3.0));
     float spark = step(0.93, hash(cell)) * band;
-    c += col * spark * 3.0;
+    c += col * spark * 2.0;
 
     // anti-aliased outer edge
     float alpha = 1.0 - smoothstep(1.0 - aa * 1.5, 1.0, rn);
+    // ragged, flickering outer edge instead of a hard oval
+    alpha *= 1.0 - smoothstep(0.25 + 0.45 * flame + 0.25 * lick, 1.0, t) * 0.92;
     gl_FragColor = vec4(c, alpha);
   }`;
 }

@@ -1,5 +1,5 @@
-import { Box3, Group, type Material, Mesh, type Object3D, Vector3 } from 'three';
-import { tiledBoxGeometry } from '../render/geometry';
+import { Box3, BoxGeometry, Group, type Material, Mesh, type Object3D, Vector3 } from 'three';
+import { worldBoxGeometry } from '../render/geometry';
 import { rayBox } from '../physics';
 
 /** cream = portal-friendly, metal = portal-proof, door = moving door slab. */
@@ -34,21 +34,29 @@ export interface RoomFaces {
   zp?: Surface;
 }
 
-const TILE_LENGTH: Record<Surface, number> = { white: 1, metal: 2, door: 2.6 };
+/** World units covered by one repeat of each surface texture. The door maps its texture once per face. */
+const TILE_LENGTH: Record<Exclude<Surface, 'door'>, number> = { white: 1, metal: 2 };
+
+/**
+ * One material for the whole block, or one per box face in three.js order
+ * (+x, −x, +y, −y, +z, −z) so floors and ceilings can differ from walls.
+ */
+export type SurfaceMaterial = Material | Material[];
 
 /** Holds the level's geometry: the blocks the player walks on and portals stick to. */
 export class World {
   readonly group = new Group();
   blocks: Block[] = [];
 
-  constructor(private readonly materials: Record<Surface, Material>) {}
+  constructor(private readonly materials: Record<Surface, SurfaceMaterial>) {}
 
   /** Adds an axis-aligned block spanning (x1,y1,z1)–(x2,y2,z2). */
   block(x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, type: Surface, noShadow = false): Block {
     const w = x2 - x1;
     const h = y2 - y1;
     const d = z2 - z1;
-    const mesh = new Mesh(tiledBoxGeometry(w, h, d, TILE_LENGTH[type]), this.materials[type]);
+    const geometry = type === 'door' ? new BoxGeometry(w, h, d) : worldBoxGeometry(x1, y1, z1, x2, y2, z2, TILE_LENGTH[type]);
+    const mesh = new Mesh(geometry, this.materials[type]);
     mesh.position.set((x1 + x2) / 2, (y1 + y2) / 2, (z1 + z2) / 2);
     mesh.receiveShadow = true;
     mesh.castShadow = !noShadow;

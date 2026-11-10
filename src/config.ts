@@ -45,24 +45,28 @@ export interface QualitySettings {
   ao: boolean;
   /** Glow around portals and other emissive things. */
   bloom: boolean;
+  /** Lens and film finish: sharpening, colour grade, vignette and grain. */
+  film: boolean;
+  /** Coloured light cast by portals, the exit, the button and each shot. */
+  glowLights: boolean;
   desc: string;
 }
 
 export const QUALITY: Readonly<Record<QualityName, QualitySettings>> = {
   low: {
-    label: 'Low', ratio: 0.75, rt: 0.5, shadow: 0, soft: false, aniso: 1, msaa: 0, ao: false, bloom: false,
+    label: 'Low', ratio: 0.75, rt: 0.5, shadow: 0, soft: false, aniso: 1, msaa: 0, ao: false, bloom: false, film: false, glowLights: false,
     desc: 'Reduced resolution, no shadows or effects. Best for older phones.',
   },
   medium: {
-    label: 'Medium', ratio: 1, rt: 0.65, shadow: 1024, soft: false, aniso: 4, msaa: 4, ao: false, bloom: true,
-    desc: 'Standard resolution, simple shadows, smooth edges and portal glow.',
+    label: 'Medium', ratio: 1, rt: 0.65, shadow: 1024, soft: false, aniso: 4, msaa: 4, ao: false, bloom: true, film: true, glowLights: true,
+    desc: 'Standard resolution, simple shadows, portal glow and a film finish.',
   },
   high: {
-    label: 'High', ratio: 1.5, rt: 0.85, shadow: 2048, soft: true, aniso: 8, msaa: 4, ao: true, bloom: true,
+    label: 'High', ratio: 1.5, rt: 0.85, shadow: 2048, soft: true, aniso: 8, msaa: 4, ao: true, bloom: true, film: true, glowLights: true,
     desc: 'Sharper image, soft shadows, ambient occlusion and crisper portal views.',
   },
   ultra: {
-    label: 'Ultra', ratio: 2, rt: 1, shadow: 4096, soft: true, aniso: 16, msaa: 8, ao: true, bloom: true,
+    label: 'Ultra', ratio: 2, rt: 1, shadow: 4096, soft: true, aniso: 16, msaa: 8, ao: true, bloom: true, film: true, glowLights: true,
     desc: 'Full resolution everywhere and the finest shadows. Needs a strong GPU.',
   },
 };

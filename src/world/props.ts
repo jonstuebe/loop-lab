@@ -245,7 +245,7 @@ export function createCubeMesh(maps: SurfaceMaps, emissiveMap: Texture): Mesh<Bo
   const mesh = new Mesh(
     roundedBoxGeometry(CUBE_SIZE * 0.97, CUBE_SIZE * 0.97, CUBE_SIZE * 0.97, 0.1, 6),
     new MeshStandardMaterial({
-      ...maps, emissiveMap, emissive: new Color(CUBE_CORE), emissiveIntensity: 1.2, roughness: 1, envMapIntensity: 1,
+      ...maps, emissiveMap, emissive: new Color(CUBE_CORE), emissiveIntensity: 1.2, roughness: 1, metalness: 1, envMapIntensity: 1,
     }),
   );
   mesh.castShadow = true;
