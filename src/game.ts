@@ -1,16 +1,16 @@
 import {
-  Color, Frustum, type Material, Matrix4, Mesh, MeshStandardMaterial, PCFShadowMap, Plane, Sphere, Vector2, Vector3,
+  type Camera, Color, Frustum, type Material, Matrix4, Mesh, MeshStandardMaterial, PCFShadowMap, Plane, Sphere, Vector2, Vector3, Vector4,
 } from 'three';
 import {
-  EYE_HEIGHT, GRAVITY, HOLD_DISTANCE, isTouch, JUMP_SPEED, KILL_Y, MAX_FALL_SPEED, QUALITY, type PortalIndex,
-  type QualityName, WALK_SPEED, loadQuality, saveQuality,
+  EYE_HEIGHT, GRAVITY, HOLD_DISTANCE, isTouch, JUMP_SPEED, KILL_Y, MAX_FALL_SPEED, PORTAL_HALF_H, PORTAL_HALF_W, QUALITY,
+  type PortalIndex, type QualityName, VR_PORTAL, WALK_SPEED, loadQuality, saveQuality,
 } from './config';
 import { dateForDay, dayNumber, formatCountdown, formatDay, formatTime, msUntilNextDay } from './daily/calendar';
 import { chamberName, dailyChamber } from './daily/generator';
 import { currentStreak, loadProgress, type Progress, recordClear } from './daily/progress';
 import { Input } from './input';
 import { type Body, overlaps, physicsStep, rayBox } from './physics';
-import { PortalSystem } from './portals';
+import { type Portal, type PortalEye, PortalSystem } from './portals';
 import { createGrimeTexture } from './render/decals';
 import { Effects } from './render/effects';
 import { Gun } from './render/gun';
@@ -61,6 +61,8 @@ const BUTTON_RED = new Color(0xff4a3a);
 const BUTTON_GREEN = new Color(0x4fe3a1);
 /** Where the portal device sits on the right controller's grip: over the forearm, just behind the hand. */
 const VR_GUN_REST = new Vector3(0, -0.01, 0.1);
+/** Extra border around a portal's on-screen outline when scissoring its view in VR, as a fraction of the eye's view. */
+const SCISSOR_MARGIN = 0.03;
 
 export class Game {
   private readonly stage: Stage;
@@ -1019,12 +1021,10 @@ export class Game {
   private render(): void {
     const { renderer, scene, camera, portalCamera } = this.stage;
     if (this.vr.active) {
-      // First VR pass: no views through portals (they show their dormant vortex)
-      // and no post-processing, which doesn't run inside an XR session.
+      // No post-processing, which doesn't run inside an XR session.
       if (renderer.shadowMap.enabled) renderer.shadowMap.needsUpdate = true;
-      this.portals.list[0].setOpen(false);
-      this.portals.list[1].setOpen(false);
       this.vrPresent();
+      this.renderVRPortalViews();
       renderer.render(scene, camera);
       return;
     }
@@ -1071,6 +1071,116 @@ export class Game {
       this.gun.group.visible = true;
     }
     this.post.render(this.time);
+  }
+  private readonly vrEyes: PortalEye[] = [];
+  private readonly corner = new Vector4();
+  private readonly eyePos = new Vector3();
+
+  /**
+   * VR: draws what each portal shows, once per eye, into that portal's render target (the
+   * eyes sit side by side in it). The main stereo render then samples each eye's own picture.
+   */
+  private renderVRPortalViews(): void {
+    const { renderer, scene, camera, portalCamera } = this.stage;
+    const [a, b] = this.portals.list;
+    // The rig has just been moved; bring the eye cameras along before reading them.
+    scene.updateMatrixWorld();
+    renderer.xr.updateCamera(camera);
+    const eyeCameras = renderer.xr.getCamera().cameras as Array<Camera & { viewport: Vector4 }>;
+    const open = this.portals.bothOpen && eyeCameras.length > 0;
+    a.setOpen(open);
+    b.setOpen(open);
+    if (!open) return;
+
+    // Each eye gets a scaled-down copy of its viewport, laid out left to right.
+    const first = eyeCameras[0].viewport;
+    const eyeW = Math.max(1, Math.round(first.z * VR_PORTAL.scale));
+    const eyeH = Math.max(1, Math.round(first.w * VR_PORTAL.scale));
+    const n = eyeCameras.length;
+    if (this.vrEyes.length !== n) {
+      this.vrEyes.length = 0;
+      for (let i = 0; i < n; i++) this.vrEyes.push({ camera: eyeCameras[i], view: new Vector4(), atlas: new Vector4() });
+    }
+    this.vrEyes.forEach((eye, i) => {
+      eye.camera = eyeCameras[i];
+      eye.view.copy(eyeCameras[i].viewport);
+      eye.atlas.set(i / n, 0, 1 / n, 1);
+    });
+    this.portals.resizeForEyes(this.vrEyes, eyeW, eyeH, Math.min(VR_PORTAL.msaa, renderer.capabilities.maxSamples));
+
+    // While presenting, three.js swaps any camera for the headset's; switch that off for
+    // these offscreen renders, and hand the headset's framebuffer back afterwards.
+    const xrTarget = renderer.getRenderTarget();
+    renderer.xr.enabled = false;
+    this.vr.showHands(false);
+    a.mesh.material = a.flatMaterial;
+    b.mesh.material = b.flatMaterial;
+
+    eyeCameras.forEach((eye, i) => {
+      this.viewProjection.multiplyMatrices(eye.projectionMatrix, eye.matrixWorldInverse);
+      this.frustum.setFromProjectionMatrix(this.viewProjection);
+      this.eyePos.setFromMatrixPosition(eye.matrixWorld);
+      portalCamera.projectionMatrix.copy(eye.projectionMatrix);
+      portalCamera.projectionMatrixInverse.copy(eye.projectionMatrixInverse);
+
+      for (const [x, y] of [[a, b], [b, a]] as const) {
+        this.portalSphere.set(x.center, 1.5);
+        if (!this.frustum.intersectsSphere(this.portalSphere)) continue;
+        // Skip portals this eye sees from behind.
+        if (this.eyePos.clone().sub(x.center).dot(x.normal) < -0.05) continue;
+        const rt = x.renderTarget;
+        rt.viewport.set(i * eyeW, 0, eyeW, eyeH);
+        if (!this.portalScissor(x, rt.scissor, i * eyeW, eyeW, eyeH)) continue;
+        rt.scissorTest = true;
+
+        const m = this.portals.transferMatrix(x, y).multiply(eye.matrixWorld);
+        m.decompose(portalCamera.position, portalCamera.quaternion, portalCamera.scale);
+        x.mesh.visible = false;
+        this.clipPlane.setFromNormalAndCoplanarPoint(y.normal, y.center.clone().addScaledVector(y.normal, 0.004));
+        renderer.clippingPlanes = [this.clipPlane];
+        renderer.setRenderTarget(rt);
+        renderer.render(scene, portalCamera);
+        x.mesh.visible = true;
+      }
+    });
+
+    renderer.clippingPlanes = [];
+    a.mesh.material = a.viewMaterial;
+    b.mesh.material = b.viewMaterial;
+    this.vr.showHands(true);
+    renderer.xr.enabled = true;
+    renderer.setRenderTarget(xrTarget);
+  }
+
+  /**
+   * Sets `out` to the part of an eye's picture (at `left`, `width` × `height` target pixels)
+   * that `portal` covers on screen, using the view-projection in `this.viewProjection`.
+   * Returns false when the portal is entirely off screen.
+   */
+  private portalScissor(portal: Portal, out: Vector4, left: number, width: number, height: number): boolean {
+    out.set(left, 0, width, height);
+    if (!VR_PORTAL.scissor) return true;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        const c = this.corner.set(sx * PORTAL_HALF_W, sy * PORTAL_HALF_H, 0, 1)
+          .applyMatrix4(portal.mesh.matrixWorld).applyMatrix4(this.viewProjection);
+        // A corner beside or behind the eye has no sensible screen position: draw the whole eye.
+        if (c.w < 0.05) return true;
+        minX = Math.min(minX, c.x / c.w);
+        maxX = Math.max(maxX, c.x / c.w);
+        minY = Math.min(minY, c.y / c.w);
+        maxY = Math.max(maxY, c.y / c.w);
+      }
+    }
+    // Room for the heat shimmer, which looks up a little way outside the portal's outline.
+    const x0 = Math.max(0, Math.floor((minX * 0.5 + 0.5 - SCISSOR_MARGIN) * width));
+    const x1 = Math.min(width, Math.ceil((maxX * 0.5 + 0.5 + SCISSOR_MARGIN) * width));
+    const y0 = Math.max(0, Math.floor((minY * 0.5 + 0.5 - SCISSOR_MARGIN) * height));
+    const y1 = Math.min(height, Math.ceil((maxY * 0.5 + 0.5 + SCISSOR_MARGIN) * height));
+    if (x1 <= x0 || y1 <= y0) return false;
+    out.set(left + x0, y0, x1 - x0, y1 - y0);
+    return true;
   }
 }
 

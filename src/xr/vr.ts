@@ -53,6 +53,7 @@ export class VRMode {
   private readonly dot: Mesh;
   private readonly head = new Vector3();
   private session: XRSession | null = null;
+  private handsShown: boolean[] = [];
 
   constructor(
     private readonly renderer: WebGLRenderer,
@@ -219,6 +220,17 @@ export class VRMode {
     this.laser.scale.set(1, 1, len);
     this.dot.visible = hitDistance !== null;
     if (hitDistance !== null) this.dot.position.copy(origin).addScaledVector(dir, hitDistance);
+  }
+
+  /**
+   * Hides or shows everything the player carries (device, laser, wrist panel), so the
+   * views through portals can be drawn without them, as on a flat screen.
+   */
+  showHands(visible: boolean): void {
+    const things = [this.hands.left.ray, this.hands.left.grip, this.hands.right.ray, this.hands.right.grip, this.dot];
+    // Restore rather than force on: an untracked controller is hidden by three.js itself.
+    if (!visible) this.handsShown = things.map((o) => o.visible);
+    things.forEach((o, i) => { o.visible = visible && (this.handsShown[i] ?? true); });
   }
 
   hideLaser(): void {
