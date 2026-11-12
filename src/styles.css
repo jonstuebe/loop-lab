@@ -115,7 +115,9 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--surface);color:v
 .qnote{font-size:13.5px !important}
 
 /* Look controls (settings sheet) */
+.eyebrow.sect{margin:14px 0 0}
 .look{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.look .eyebrow.sect{margin:0 0 10px}
 .look label{font-family:var(--display);font-weight:600;font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink)}
 .look input[type=range]{width:100%;margin:10px 0 6px;accent-color:var(--blue);cursor:pointer}
 .look input[type=range]:focus-visible,.look .check input:focus-visible{outline:1px solid var(--blue);outline-offset:3px}

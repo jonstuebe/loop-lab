@@ -65,13 +65,14 @@ export class Overlay {
     this.fpsEl = null;
   }
 
-  /** Shows the quality picker as a bottom sheet so the scene stays visible behind it. */
+  /** Shows the settings sheet (graphics quality, look controls) as a bottom sheet so the scene stays visible behind it. */
   showSettings(spec: SettingsSpec): void {
     let quality = spec.current;
     const options = QUALITY_ORDER
       .map((k) => `<button role="radio" data-q="${k}" aria-checked="${k === quality}">${QUALITY[k].label}</button>`)
       .join('');
-    this.card.innerHTML = `<h2>Graphics quality</h2>
+    this.card.innerHTML = `<h2>Settings</h2>
+      <div class="eyebrow sect">Graphics quality</div>
       <p class="qnote">Higher settings look sharper but can lower the frame rate. The scene behind updates as you switch, so you can compare.</p>
       <div class="seg" role="radiogroup" aria-label="Graphics quality">${options}</div>
       <div class="qrow"><p id="qdesc"></p><p class="fps" id="fpsOut">– fps</p></div>
@@ -131,6 +132,7 @@ export class Overlay {
 function lookControlsHtml(): string {
   const { sensitivity, invertY } = lookSettings();
   return `<div class="look">
+      <div class="eyebrow sect">Controls</div>
       <div class="qrow"><label for="sensIn">Look sensitivity</label><output class="fps" id="sensOut" for="sensIn">${formatSensitivity(sensitivity)}</output></div>
       <input type="range" id="sensIn" min="${SENSITIVITY_MIN}" max="${SENSITIVITY_MAX}" step="${SENSITIVITY_STEP}" value="${sensitivity}">
       <label class="check"><input type="checkbox" id="invertY"${invertY ? ' checked' : ''}> Invert Y</label>
