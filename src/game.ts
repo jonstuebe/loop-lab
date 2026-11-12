@@ -396,7 +396,7 @@ export class Game {
         return;
       }
     }
-    this.hud.toast('Look at the cube to pick it up');
+    this.hud.toast(this.vr.active ? 'Point at the cube to pick it up' : 'Look at the cube to pick it up');
   }
 
   private updateCrosshair(): void {

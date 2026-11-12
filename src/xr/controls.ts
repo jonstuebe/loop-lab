@@ -45,7 +45,7 @@ export function readPad(pad: PadLike | null | undefined): PadState {
     upper: button(5),
     stickX: dead(pad.axes[2]),
     // Gamepad Y axes point down; flip so forward is positive.
-    stickY: -dead(pad.axes[3]),
+    stickY: 0 - dead(pad.axes[3]), // (0 - x avoids a -0 at rest)
   };
 }
 
