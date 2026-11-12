@@ -1,5 +1,5 @@
 import { MeshStandardMaterial, Scene, Vector3 } from 'three';
-import { GRAVITY, MAX_FALL_SPEED, type PortalIndex, WALK_SPEED } from '../config';
+import { EYE_HEIGHT, GRAVITY, MAX_FALL_SPEED, type PortalIndex, WALK_SPEED } from '../config';
 import { type Body, physicsStep } from '../physics';
 import { PortalSystem } from '../portals';
 import { Frame } from './frame';
@@ -143,17 +143,49 @@ export class FramedHarness {
    * (a sudden jump in position), then steers toward the goal. Returns true once
    * `done` holds (by default: standing on the exit pad).
    */
-  throughPortal(entryX: number, entryZ: number, opts: { seconds?: number; done?: (canonical: Vector3) => boolean } = {}): boolean {
+  throughPortal(
+    entryX: number,
+    entryZ: number,
+    opts: { seconds?: number; done?: (canonical: Vector3) => boolean; route?: readonly (readonly [number, number])[] } = {},
+  ): boolean {
     const h = this.h;
     const entry = this.world(entryX, 0, entryZ);
+    const route = (opts.route ?? []).map(([x, z]) => this.world(x, 0, z));
+    let i = 0;
     let teleported = false;
     const last = h.player.pos.clone();
     const done = opts.done;
     return simulate(h, opts.seconds ?? 10, (p) => {
       if (p.pos.distanceTo(last) > 1) teleported = true;
       last.copy(p.pos);
-      return teleported ? toward(p, h.setup.goal[0], h.setup.goal[2]) : toward(p, entry.x, entry.z);
+      if (!teleported) return toward(p, entry.x, entry.z);
+      // After the portal: follow the optional route, then head for the goal.
+      while (i < route.length && Math.hypot(route[i].x - p.pos.x, route[i].z - p.pos.z) < 0.4) i++;
+      return i < route.length ? toward(p, route[i].x, route[i].z) : toward(p, h.setup.goal[0], h.setup.goal[2]);
     }, done ? (p) => done(this.canonical(p)) : (p) => atGoal(h, p));
+  }
+
+  /** The player's eye position in canonical coordinates (to aim the next shot from where they stand). */
+  eye(): [number, number, number] {
+    const c = this.canonical(this.h.player);
+    return [c.x, c.y + EYE_HEIGHT, c.z];
+  }
+
+  /**
+   * Walks a canonical route on foot and comes to rest at its last point.
+   * Returns false if the player falls, or doesn't arrive in time.
+   */
+  walk(route: readonly (readonly [number, number])[], seconds = 8): boolean {
+    const h = this.h;
+    const points = route.map(([x, z]) => this.world(x, 0, z));
+    let i = 0;
+    const arrived = simulate(h, seconds, (p) => {
+      while (i < points.length - 1 && Math.hypot(points[i].x - p.pos.x, points[i].z - p.pos.z) < 0.4) i++;
+      return toward(p, points[i].x, points[i].z);
+    }, (p) => i === points.length - 1 && p.onGround && Math.hypot(points[i].x - p.pos.x, points[i].z - p.pos.z) < 0.3);
+    if (!arrived) return false;
+    simulate(h, 0.5, () => null, () => false); // come to rest
+    return h.player.onGround;
   }
 
   /** Walks a canonical route (each waypoint reached within 0.4), then to the goal. */
