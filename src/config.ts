@@ -71,6 +71,19 @@ export const QUALITY: Readonly<Record<QualityName, QualitySettings>> = {
   },
 };
 
+/**
+ * Views through portals in VR. Each open portal in sight costs one extra scene render per eye,
+ * so these are the knobs to turn if the headset drops frames.
+ */
+export const VR_PORTAL = {
+  /** Resolution of each eye's portal view, relative to that eye's share of the headset framebuffer. */
+  scale: 0.5,
+  /** MSAA samples for the portal views; 0 disables it. */
+  msaa: 0,
+  /** Render only the part of each eye's view that the portal covers, rather than the whole eye. */
+  scissor: true,
+} as const;
+
 export const QUALITY_ORDER: readonly QualityName[] = ['low', 'medium', 'high', 'ultra'];
 
 export function isQualityName(value: unknown): value is QualityName {

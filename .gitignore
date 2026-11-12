@@ -4,3 +4,6 @@ dist
 .DS_Store
 .wrangler/
 .shots/
+
+# Agent worktrees
+.claude/worktrees/

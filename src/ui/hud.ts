@@ -53,6 +53,16 @@ export class Hud {
     this.crossOrange?.classList.toggle('on', orangePlaced);
   }
 
+  /** The toast currently on screen, if any (mirrored on the VR wrist panel). */
+  get activeToast(): string | null {
+    return this.toastTimer > 0 ? this.toastEl.textContent : null;
+  }
+
+  /** Chamber label (with run time), name and hint, as shown in the info chip. */
+  get chipText(): { label: string; name: string; hint: string } {
+    return { label: this.levelNum.textContent ?? '', name: this.levelName.textContent ?? '', hint: this.hint.textContent ?? '' };
+  }
+
   toast(message: string): void {
     this.toastEl.textContent = message;
     this.toastEl.classList.add('show');

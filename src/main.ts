@@ -9,6 +9,11 @@ if (!(canvas instanceof HTMLCanvasElement)) throw new Error('Missing game canvas
 const preloader = new Preloader(TEXTURE_STAGES + 2);
 
 async function boot(canvas: HTMLCanvasElement): Promise<void> {
+  // Dev-only Quest emulator; the condition is false in production builds, so IWER isn't bundled.
+  if (import.meta.env.DEV && new URLSearchParams(location.search).has('xr')) {
+    const { installQuestEmulator } = await import('./xr/emulate');
+    await installQuestEmulator();
+  }
   // Every texture is drawn in code, which blocks; the loader repaints between surfaces.
   const steps = textureSteps();
   await preloader.begin(FIRST_TEXTURE_STAGE);

@@ -58,6 +58,14 @@ export class Overlay {
     go.focus({ preventScroll: true });
   }
 
+  /** Plain-text gist of the card on screen (for the VR panel, which can't show HTML). */
+  summary(): { eyebrow?: string; title: string; body?: string; label: string } | null {
+    const spec = this.current;
+    if (!spec) return null;
+    const text = (sel: string) => this.card.querySelector(sel)?.textContent?.replace(/\s+/g, ' ').trim() || undefined;
+    return { eyebrow: text('.eyebrow'), title: text('h1, h2') ?? '', body: text('p'), label: spec.label };
+  }
+
   hide(): void {
     this.root.classList.add('hidden');
     this.root.classList.remove('peek');

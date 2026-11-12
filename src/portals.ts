@@ -1,6 +1,6 @@
 import {
-  AdditiveBlending, Color, HalfFloatType, LinearFilter, Matrix4, Mesh, PlaneGeometry, type Scene, ShaderMaterial, Vector2, Vector3,
-  WebGLRenderTarget,
+  AdditiveBlending, type Camera, Color, HalfFloatType, LinearFilter, Matrix4, Mesh, PlaneGeometry, type Scene, ShaderMaterial, Vector2,
+  Vector3, Vector4, WebGLRenderTarget,
 } from 'three';
 import { PORTAL_COLORS, PORTAL_HALF_H, PORTAL_HALF_W, type PortalIndex } from './config';
 import { pointInside } from './physics';
@@ -46,10 +46,16 @@ const APERTURE = 0.82;
  * Portal surface: a turbulent plasma ring around an aperture. The "view"
  * variant samples a screen-space render target showing what's on the other
  * side once both portals are open, bent slightly by the heat of the rim.
+ *
+ * Screen space is relative to `view`, the viewport being drawn into (the whole
+ * canvas on a flat screen, one eye's half of the framebuffer in VR), and `atlas`
+ * says which part of the render target holds that viewport's picture.
  */
 function fragmentShader(withView: boolean): string {
   return /* glsl */ `
-  ${withView ? 'uniform sampler2D map; uniform vec2 res; uniform float open;' : ''}
+  ${withView ? `uniform sampler2D map; uniform vec4 view; uniform vec4 atlas; uniform vec2 pad; uniform float open;
+  // Clamped so a bent lookup at the edge of one eye's picture can't reach into the other's.
+  vec4 seeThrough(vec2 uv) { return texture2D(map, clamp(uv, pad, 1.0 - pad) * atlas.zw + atlas.xy); }` : ''}
   uniform vec3 col; uniform float time; uniform float grow; uniform float surge;
   varying vec2 vUv;
   ${NOISE}
@@ -81,11 +87,11 @@ function fragmentShader(withView: boolean): string {
       // hint of colour separation.
       float lens = smoothstep(-0.2, 0.0, d);
       vec2 bend = (vec2(n1, n2) - 0.5) * 0.022 * lens * lens;
-      vec2 suv = gl_FragCoord.xy / res + bend;
+      vec2 suv = (gl_FragCoord.xy - view.xy) / view.zw + bend;
       c = vec3(
-        texture2D(map, suv + bend * 0.35).r,
-        texture2D(map, suv).g,
-        texture2D(map, suv - bend * 0.35).b
+        seeThrough(suv + bend * 0.35).r,
+        seeThrough(suv).g,
+        seeThrough(suv - bend * 0.35).b
       );
       c *= 1.0 - 0.3 * lens * lens;
     }` : ''}
@@ -109,6 +115,10 @@ function fragmentShader(withView: boolean): string {
     float alpha = max(inside, clamp(lum * 0.9, 0.0, 1.0) * fade);
     c = mix(energy, c + energy, inside);
     gl_FragColor = vec4(c, alpha);
+    // No-ops under the desktop post-processing chain (which tone-maps at the end);
+    // in VR the frame is drawn straight to the headset, so this is where it happens.
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
   }`;
 }
 
@@ -134,6 +144,18 @@ void main() {
   gl_FragColor = vec4(col * glow * (1.0 + surge * 2.0) * grow, 1.0);
 }`;
 
+/** Where one viewport's picture of the view through a portal is, and which camera draws that viewport. */
+export interface PortalEye {
+  /** The camera the main render uses for this viewport. */
+  camera: Camera;
+  /** The viewport in framebuffer pixels: x, y, width, height. */
+  view: Vector4;
+  /** The matching part of the portal's render target, in UV: offset x, y, scale x, y. */
+  atlas: Vector4;
+}
+
+const WHOLE_TARGET = new Vector4(0, 0, 1, 1);
+
 export class Portal {
   readonly color: number;
   readonly renderTarget = new WebGLRenderTarget(16, 16, {
@@ -151,6 +173,8 @@ export class Portal {
   private popAnim = 1;
   /** Mesh matrix without the pop scaling. */
   private readonly baseMatrix = new Matrix4();
+  /** VR only: one entry per eye. Empty on a flat screen, where the target is the whole view. */
+  private eyes: readonly PortalEye[] = [];
 
   placed = false;
   readonly center = new Vector3();
@@ -171,7 +195,9 @@ export class Portal {
       fragmentShader: fragmentShader(true),
       uniforms: {
         map: { value: this.renderTarget.texture },
-        res: { value: new Vector2(1, 1) },
+        view: { value: new Vector4(0, 0, 1, 1) },
+        atlas: { value: WHOLE_TARGET },
+        pad: { value: new Vector2(0, 0) },
         open: { value: 0 },
         col: { value: col },
         time,
@@ -190,6 +216,14 @@ export class Portal {
     this.mesh.matrixAutoUpdate = false;
     this.mesh.visible = false;
     this.mesh.renderOrder = 1;
+    // In VR the mesh is drawn once per eye; point the shader at that eye's picture.
+    this.mesh.onBeforeRender = (_renderer, _scene, camera) => {
+      const eye = this.eyes.find((e) => e.camera === camera);
+      if (!eye) return;
+      this.viewMaterial.uniforms.view.value = eye.view;
+      this.viewMaterial.uniforms.atlas.value = eye.atlas;
+      this.viewMaterial.uniformsNeedUpdate = true;
+    };
 
     const halo = new Mesh(
       new PlaneGeometry(PORTAL_HALF_W * 2 * HALO_SCALE, PORTAL_HALF_H * 2 * HALO_SCALE),
@@ -234,16 +268,40 @@ export class Portal {
     this.viewMaterial.uniforms.open.value = open ? 1 : 0;
   }
 
+  /** Flat screen: one picture covering the whole drawing buffer. */
   resize(drawSize: Vector2, rtScale: number, samples: number): void {
-    if (this.renderTarget.samples !== samples) {
-      this.renderTarget.samples = samples;
-      this.renderTarget.dispose();
+    this.setTarget(Math.round(drawSize.x * rtScale), Math.round(drawSize.y * rtScale), samples);
+    this.eyes = [];
+    const { view, atlas, pad } = this.viewMaterial.uniforms;
+    view.value = new Vector4(0, 0, drawSize.x, drawSize.y);
+    atlas.value = WHOLE_TARGET;
+    (pad.value as Vector2).set(0, 0);
+  }
+
+  /**
+   * VR: one picture per eye, side by side in the render target, each `eyeWidth` × `eyeHeight`
+   * target pixels. Cheap to call every frame; the target is only rebuilt when its size changes.
+   */
+  resizeForEyes(eyes: readonly PortalEye[], eyeWidth: number, eyeHeight: number, samples: number): void {
+    this.setTarget(eyeWidth * eyes.length, eyeHeight, samples);
+    this.eyes = eyes;
+    // Half a texel in from each edge, so filtering never blends in the neighbouring eye.
+    (this.viewMaterial.uniforms.pad.value as Vector2).set(0.5 / eyeWidth, 0.5 / eyeHeight);
+  }
+
+  private setTarget(width: number, height: number, samples: number): void {
+    const rt = this.renderTarget;
+    if (rt.samples !== samples) {
+      rt.samples = samples;
+      rt.dispose();
     }
-    this.renderTarget.setSize(
-      Math.max(1, Math.round(drawSize.x * rtScale)),
-      Math.max(1, Math.round(drawSize.y * rtScale)),
-    );
-    (this.viewMaterial.uniforms.res.value as Vector2).copy(drawSize);
+    width = Math.max(1, width);
+    height = Math.max(1, height);
+    if (rt.width !== width || rt.height !== height) rt.setSize(width, height);
+    // setSize resets these only when the size changes; VR leaves them on one eye's region.
+    rt.viewport.set(0, 0, width, height);
+    rt.scissor.set(0, 0, width, height);
+    rt.scissorTest = false;
   }
 
   private static readonly _scale = new Matrix4();
@@ -301,6 +359,10 @@ export class PortalSystem {
 
   resize(drawSize: Vector2, rtScale: number, samples: number): void {
     for (const p of this.list) p.resize(drawSize, rtScale, samples);
+  }
+
+  resizeForEyes(eyes: readonly PortalEye[], eyeWidth: number, eyeHeight: number, samples: number): void {
+    for (const p of this.list) p.resizeForEyes(eyes, eyeWidth, eyeHeight, samples);
   }
 
   /**
