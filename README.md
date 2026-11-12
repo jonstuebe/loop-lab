@@ -79,7 +79,7 @@ tests/                  Vitest unit tests, including headless level solutions
 
 Each day's chamber is generated from its number, so everyone gets the same one. `src/daily/generator.ts` picks one of ten archetypes (climb, crossing, fling, geyser, payload, switchback, courier, skylight, dogleg, airlock; dealt in shuffled blocks of one of each, never the same one two days running), rolls its dimensions and an orientation, then replays the archetype's reference solution headlessly. A layout that the solution can't clear is re-rolled, so every daily chamber is solvable. The tests check the first two years of chambers.
 
-To add an archetype, add an entry to `ARCHETYPES` with `roll`, `build` (in canonical coordinates, through the `FramedBuilder`), a known-good `fallback` and a `solve` that clears it. Changing an existing archetype changes past days' chambers too.
+To add an archetype, add an entry to `ARCHETYPES` with `roll`, `build` (in canonical coordinates, through the `FramedBuilder`), a known-good `fallback` and a `solve` that clears it. Changing an existing archetype changes past days' chambers too. Days up to `LEGACY_LAST_DAY` (20) are dealt from the original five archetypes and pinned by `tests/legacy.test.ts`, so released chambers never change; new archetypes only appear after it.
 
 ### Adding a training chamber
 

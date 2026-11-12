@@ -577,20 +577,38 @@ const ADJECTIVES = [
   'Marble', 'Humble', 'Clever', 'Restless', 'Patient', 'Golden', 'Hidden', 'Woolly', 'Mellow', 'Zippy',
 ] as const;
 
-/** Archetype for a day: shuffled in blocks of one of each, so no archetype repeats on consecutive days. */
+/** The original five archetypes: the only pool days up to LEGACY_LAST_DAY draw from. */
+const LEGACY_ARCHETYPES: readonly Archetype[] = ARCHETYPES.slice(0, 5);
+
+/**
+ * Last daily chamber dealt from the original five-archetype shuffle. Days up
+ * to here were (or may have been) released before the pool grew to ten, and
+ * players keep clears and times per day, so those chambers must never change.
+ * Day 11 was live when the new archetypes were added; 20 leaves margin until
+ * they ship and ends a five-day legacy block. Never lower this.
+ */
+export const LEGACY_LAST_DAY = 20;
+
+/** Shuffled blocks of one of each archetype, so none repeats on consecutive days. */
+function dealt(pool: readonly Archetype[], salt: number, index: number, before?: Archetype): Archetype {
+  const n = pool.length;
+  const block = Math.floor(index / n);
+  const perm = shuffle(mulberry32(hashSeed(salt, block)), pool.map((_, i) => i));
+  const last = block > 0
+    ? pool[shuffle(mulberry32(hashSeed(salt, block - 1)), pool.map((_, i) => i))[n - 1]]
+    : before;
+  if (last && pool[perm[0]] === last) [perm[0], perm[1]] = [perm[1], perm[0]];
+  return pool[perm[((index % n) + n) % n]];
+}
+
+/**
+ * Archetype for a day. Days up to LEGACY_LAST_DAY keep the original
+ * five-archetype schedule exactly; later days are dealt from the full pool,
+ * never repeating the previous day's archetype.
+ */
 export function archetypeFor(day: number): Archetype {
-  const n = ARCHETYPES.length;
-  const blockOf = (d: number) => Math.floor((d - 1) / n);
-  const order = (block: number): number[] => {
-    const perm = shuffle(mulberry32(hashSeed(0x10a9, block)), ARCHETYPES.map((_, i) => i));
-    if (block > 0) {
-      const prev = shuffle(mulberry32(hashSeed(0x10a9, block - 1)), ARCHETYPES.map((_, i) => i));
-      if (perm[0] === prev[n - 1]) [perm[0], perm[1]] = [perm[1], perm[0]];
-    }
-    return perm;
-  };
-  const block = blockOf(day);
-  return ARCHETYPES[order(block)[(((day - 1) % n) + n) % n]];
+  if (day <= LEGACY_LAST_DAY) return dealt(LEGACY_ARCHETYPES, 0x10a9, day - 1);
+  return dealt(ARCHETYPES, 0x10b0, day - LEGACY_LAST_DAY - 1, archetypeFor(LEGACY_LAST_DAY));
 }
 
 /** The chamber's name, e.g. "Cobalt Ascent". Cheap: doesn't build anything. */
