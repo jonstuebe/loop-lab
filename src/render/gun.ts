@@ -27,6 +27,8 @@ interface Lit {
  */
 export class Gun {
   readonly group = new Group();
+  /** Resting offset from the parent: the camera on desktop, the right controller's grip in VR. */
+  readonly rest = REST.clone();
   /** Every lit material, so one shot can recolour them all. */
   private readonly lit: Lit[] = [];
   private readonly pbr: Material[] = [];
@@ -230,6 +232,16 @@ export class Gun {
     this.recoil.v += 2.4;
   }
 
+  /** Mounts the device on `parent` (the camera, or a VR controller's grip) at `rest`. */
+  mount(parent: Object3D, rest: Vector3): void {
+    parent.add(this.group);
+    this.rest.copy(rest);
+    this.group.position.copy(rest);
+  }
+
+  /** Where the device rests on the camera in flat-screen play. */
+  static readonly SCREEN_REST: Readonly<Vector3> = REST;
+
   tipWorldPosition(target: Vector3): Vector3 {
     return this.tip.getWorldPosition(target);
   }
@@ -243,10 +255,11 @@ export class Gun {
     springStep(this.recoil, 0, 180, 10, dt);
     if (groundSpeed > 0.5) this.bob += dt * groundSpeed * 1.8;
     const r = this.recoil.x;
+    const rest = this.rest;
     this.group.position.set(
-      REST.x + Math.sin(this.bob) * 0.01,
-      REST.y + Math.abs(Math.cos(this.bob)) * 0.01 - r * 0.012 - dip * 0.25,
-      REST.z + r * 0.05,
+      rest.x + Math.sin(this.bob) * 0.01,
+      rest.y + Math.abs(Math.cos(this.bob)) * 0.01 - r * 0.012 - dip * 0.25,
+      rest.z + r * 0.05,
     );
     this.group.rotation.x = r * 0.18;
     // lit parts burn hot on each shot and settle back

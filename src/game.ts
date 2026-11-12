@@ -24,6 +24,8 @@ import { Dressing } from './world/dressing';
 import { type LevelDef, LEVELS } from './world/levels';
 import { animateCube, ButtonProp, CUBE_SIZE, createCubeMesh, GoalProp, type Spring, springStep } from './world/props';
 import { type Block, type Collider, type Surface, type SurfaceMaterial, World } from './world/world';
+import { facingYaw } from './xr/controls';
+import { VRMode } from './xr/vr';
 
 type GameState = 'menu' | 'play' | 'done' | 'settings';
 
@@ -57,6 +59,8 @@ const PORTAL_GLOW = 7;
 const GOAL_GLOW = 4;
 const BUTTON_RED = new Color(0xff4a3a);
 const BUTTON_GREEN = new Color(0x4fe3a1);
+/** Where the portal device sits on the right controller's grip: over the forearm, just behind the hand. */
+const VR_GUN_REST = new Vector3(0, -0.01, 0.1);
 
 export class Game {
   private readonly stage: Stage;
@@ -71,6 +75,11 @@ export class Game {
   private readonly hud = new Hud();
   private readonly overlay = new Overlay();
   private readonly input: Input;
+  private readonly vr: VRMode;
+  private vrSupported = false;
+  /** The title card, so it can be redrawn once VR support is known. */
+  private mainMenu: CardSpec | null = null;
+  private readonly headStep = new Vector3();
   private readonly cubeMesh: ReturnType<typeof createCubeMesh>;
   private readonly propSteelMaterial = new MeshStandardMaterial({ color: 0x4d5663, roughness: 0.36, metalness: 1 });
 
@@ -156,6 +165,21 @@ export class Game {
       openMenu: () => this.openMenu(),
     });
 
+    this.vr = new VRMode(this.stage.renderer, camera, scene, {
+      shoot: (i) => this.shoot(i),
+      jump: () => { this.jumpBuffer = JUMP_BUFFER; },
+      grab: () => this.toggleGrab(),
+      restart: () => this.loadLevel(this.level),
+      menu: () => this.openMenu(),
+      confirm: () => this.confirmCard(),
+      sessionStarted: () => this.onVRStart(),
+      sessionEnded: () => this.onVREnd(),
+    });
+    void VRMode.isSupported().then((ok) => {
+      this.vrSupported = ok;
+      if (ok && this.mainMenu && this.overlay.current === this.mainMenu) this.showMenu();
+    });
+
     this.quality = loadQuality();
     this.rtScale = QUALITY[this.quality].rt;
     window.addEventListener('resize', () => this.onResize());
@@ -166,7 +190,8 @@ export class Game {
     this.enter({ kind: 'daily', day: dayNumber() });
     this.started = false;
     this.showMenu();
-    requestAnimationFrame(this.frame);
+    // The renderer's loop keeps running inside a VR session, where window rAF stops.
+    this.stage.renderer.setAnimationLoop(this.frame);
   }
 
   /** Compiles shaders for the current scene so the first frames don't stutter. */
@@ -206,6 +231,8 @@ export class Game {
     this.player.vel.set(0, 0, 0);
     this.yaw = setup.yaw;
     this.pitch = 0;
+    // In VR, turn the rig so the player's head faces the chamber's spawn direction.
+    if (this.vr.active) this.vr.rigYaw += setup.yaw - this.vr.headAngles().yaw;
     this.dip.x = this.dip.v = 0;
 
     this.cube = null;
@@ -302,6 +329,18 @@ export class Game {
     return new Vector3(-Math.sin(this.yaw) * cp, Math.sin(this.pitch), -Math.cos(this.yaw) * cp);
   }
 
+  /** Where shots and grabs point: the view on a screen, the right controller in VR. */
+  private aim(): { origin: Vector3; dir: Vector3 } {
+    const origin = new Vector3();
+    const dir = new Vector3();
+    if (this.vr.active) this.vr.aim(origin, dir);
+    else {
+      origin.copy(this.eyePosition());
+      dir.copy(this.forward());
+    }
+    return { origin, dir };
+  }
+
   private look(dx: number, dy: number, sensitivity: number): void {
     this.yaw -= dx * sensitivity;
     this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch - dy * sensitivity));
@@ -309,8 +348,7 @@ export class Game {
 
   private shoot(index: PortalIndex): void {
     if (this.state !== 'play') return;
-    const origin = this.eyePosition();
-    const dir = this.forward();
+    const { origin, dir } = this.aim();
     const hit = this.world.raycast(origin, dir);
     const color = this.portals.list[index].color;
     this.gun.fire(color);
@@ -349,8 +387,7 @@ export class Game {
       cube.vel.copy(this.player.vel);
       return;
     }
-    const origin = this.eyePosition();
-    const dir = this.forward();
+    const { origin, dir } = this.aim();
     const hit = rayBox(origin, dir, cube.pos.clone().sub(cube.half), cube.pos.clone().add(cube.half));
     if (hit && hit.t < GRAB_RANGE) {
       const wall = this.world.raycast(origin, dir);
@@ -382,6 +419,10 @@ export class Game {
     if (input.isDown('ArrowRight')) this.yaw -= 2.2 * dt;
     ix += input.joystick.x;
     iz += input.joystick.y;
+    if (this.vr.active) {
+      ix += this.vr.move.x;
+      iz += this.vr.move.y;
+    }
     const il = Math.hypot(ix, iz);
     if (il > 1) { ix /= il; iz /= il; }
     const sy = Math.sin(this.yaw);
@@ -416,12 +457,7 @@ export class Game {
     v.y = Math.max(v.y - GRAVITY * dt, -MAX_FALL_SPEED);
 
     const cube = this.cube;
-    const playerColliders: Collider[] = [...this.world.blocks];
-    if (cube && !cube.held) {
-      cube.collider.min.copy(cube.pos).sub(cube.half);
-      cube.collider.max.copy(cube.pos).add(cube.half);
-      playerColliders.push(cube.collider);
-    }
+    const playerColliders = this.playerColliders();
     const wasGrounded = player.onGround;
     const vyBefore = v.y;
     const transfer = physicsStep(player, dt, playerColliders, this.portals);
@@ -441,9 +477,36 @@ export class Game {
     if (player.pos.y < KILL_Y) this.loadLevel(this.level);
   }
 
+  /** Everything the player can bump into, including the cube when it's not held. */
+  private playerColliders(): Collider[] {
+    const cols: Collider[] = [...this.world.blocks];
+    const cube = this.cube;
+    if (cube && !cube.held) {
+      cube.collider.min.copy(cube.pos).sub(cube.half);
+      cube.collider.max.copy(cube.pos).add(cube.half);
+      cols.push(cube.collider);
+    }
+    return cols;
+  }
+
   /** Keep looking the "same" way relative to the exit portal. */
   private onPlayerTeleported(transfer: Matrix4): void {
     const f = this.forward().transformDirection(transfer);
+    if (this.vr.active) {
+      // The headset owns pitch; only the rig's turn can change. Face along the
+      // exit, or along the flight path when the exit faces straight up or down.
+      const yaw = facingYaw(f, this.player.vel);
+      if (yaw !== null) {
+        this.vr.rigYaw += yaw - this.yaw;
+        this.yaw = yaw;
+      }
+      const cube = this.cube;
+      if (cube?.held) {
+        cube.pos.copy(this.eyePosition()).addScaledVector(this.forward(), HOLD_DISTANCE);
+        cube.vel.set(0, 0, 0);
+      }
+      return;
+    }
     this.pitch = Math.max(-1.5, Math.min(1.5, Math.asin(Math.max(-1, Math.min(1, f.y)))));
     if (Math.abs(f.y) < 0.999) this.yaw = Math.atan2(-f.x, -f.z);
     const cube = this.cube;
@@ -455,7 +518,8 @@ export class Game {
 
   private updateCube(cube: Cube, dt: number): void {
     if (cube.held) {
-      const target = this.eyePosition().addScaledVector(this.forward(), HOLD_DISTANCE);
+      const { origin, dir } = this.aim();
+      const target = origin.addScaledVector(dir, HOLD_DISTANCE);
       const delta = target.sub(cube.pos);
       if (delta.length() > HOLD_BREAK_DISTANCE) {
         cube.held = false;
@@ -541,9 +605,12 @@ export class Game {
       { label: 'Past chambers', onClick: () => this.showArchive() },
       { label: 'Training', onClick: () => this.showTraining() },
     ];
+    if (this.vrSupported && !this.vr.active) {
+      actions.unshift({ label: 'Play in VR', onClick: () => this.enterVR() });
+    }
     if (midRun && !onToday) actions.unshift({ label: 'Today’s chamber', onClick: () => this.play({ kind: 'daily', day: today }) });
 
-    this.overlay.showCard({
+    this.mainMenu = {
       html: `<h1><span class="ring"></span><span class="ring o"></span> Loop Lab</h1>
         <p>A new test chamber every day. Fire two linked portals and reach the glowing green exit.</p>
         <div class="today">
@@ -559,7 +626,99 @@ export class Game {
       label: midRun ? (onToday ? 'Resume today’s chamber' : `Resume ${this.level.name}`) : rec ? 'Play today’s chamber again' : 'Play today’s chamber',
       onGo: () => (midRun ? this.resumePlay() : this.play({ kind: 'daily', day: today })),
       actions,
+    };
+    this.overlay.showCard(this.mainMenu);
+  }
+
+  // ---------- VR ----------
+
+  private enterVR(): void {
+    this.vr.enter().catch((error: unknown) => {
+      console.error('Could not start VR', error);
+      this.hud.toast('Couldn’t start VR');
     });
+  }
+
+  /** A on a VR controller: the card's main button. */
+  private confirmCard(): void {
+    const card = this.overlay.current;
+    if (!card) return;
+    this.overlay.hide();
+    card.onGo();
+  }
+
+  private onVRStart(): void {
+    this.gun.mount(this.vr.rightGrip, VR_GUN_REST);
+    this.vr.rigYaw = this.yaw;
+    this.vr.panelMode('wrist');
+    // Jump straight in: whatever the card on screen offered (play or resume).
+    if (this.state !== 'play') this.confirmCard();
+  }
+
+  private onVREnd(): void {
+    const { camera } = this.stage;
+    this.gun.mount(camera, Gun.SCREEN_REST);
+    this.vr.rigYaw = 0;
+    this.vr.rig.position.set(0, 0, 0);
+    this.vr.rig.rotation.set(0, 0, 0);
+    this.vr.rig.updateMatrixWorld(true);
+    this.vr.panel.mesh.removeFromParent();
+    this.vr.hideLaser();
+    this.onResize();
+    if (this.state === 'play') this.openMenu();
+    else if (this.overlay.current === this.mainMenu) this.showMenu();
+  }
+
+  /** Per-frame VR input: head pose, controller buttons, and room-scale steps. */
+  private vrInput(): void {
+    const { vr, player } = this;
+    vr.updateHead();
+    const head = vr.headAngles();
+    this.yaw = head.yaw;
+    this.pitch = head.pitch;
+    const playing = this.state === 'play';
+    vr.poll(playing);
+    if (!playing) return;
+
+    // Walking around the room moves the body too (through the collision solver, so
+    // walls push back), and stepping through an open portal teleports like walking in.
+    const feet = new Vector3(player.pos.x, player.pos.y - player.half.y, player.pos.z);
+    const step = vr.headStep(feet, this.headStep);
+    if (step.lengthSq() < 1e-6) return;
+    const vel = player.vel.clone();
+    const grounded = player.onGround;
+    player.vel.set(step.x, 0, step.z);
+    const transfer = physicsStep(player, 1, this.playerColliders(), this.portals);
+    player.vel.copy(vel);
+    player.onGround = grounded;
+    if (transfer) {
+      const speed = vel.length();
+      if (speed > 1e-6) player.vel.transformDirection(transfer).multiplyScalar(speed);
+      this.onPlayerTeleported(transfer);
+    }
+  }
+
+  /** Places the rig under the head, and updates the aiming laser and the panel. */
+  private vrPresent(): void {
+    const { vr, player } = this;
+    vr.placeRig(new Vector3(player.pos.x, player.pos.y - player.half.y, player.pos.z));
+    const card = this.overlay.summary();
+    if (this.state === 'play' || !card) {
+      const { origin, dir } = this.aim();
+      const hit = this.state === 'play' ? this.world.raycast(origin, dir) : null;
+      if (this.state === 'play') vr.showLaser(hit ? hit.t : null, origin, dir);
+      else vr.hideLaser();
+      vr.panelMode('wrist');
+      const chip = this.hud.chipText;
+      vr.panel.set({
+        eyebrow: chip.label, title: chip.name, body: chip.hint,
+        toast: this.hud.activeToast ?? undefined, prompt: 'B restart · Y menu',
+      });
+    } else {
+      vr.hideLaser();
+      vr.panelMode('card');
+      vr.panel.set({ eyebrow: card.eyebrow, title: card.title, body: card.body, prompt: `A  ${card.label}` });
+    }
   }
 
   /** Every daily chamber so far, newest first. */
@@ -766,6 +925,8 @@ export class Game {
 
   private onResize(): void {
     const { renderer, camera } = this.stage;
+    // The headset sets its own size; three.js refuses resizes mid-session.
+    if (renderer.xr.isPresenting) return;
     renderer.setSize(window.innerWidth, window.innerHeight, false);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -778,7 +939,6 @@ export class Game {
   // ---------- frame loop ----------
 
   private readonly frame = (now: number): void => {
-    requestAnimationFrame(this.frame);
     const rawDt = (now - this.lastFrame) / 1000;
     this.lastFrame = now;
     const dt = Math.min(rawDt, 0.05);
@@ -793,6 +953,7 @@ export class Game {
       this.fpsFrames = 0;
     }
 
+    if (this.vr.active) this.vrInput();
     if (this.state === 'play') {
       const steps = dt > 0.012 ? Math.ceil(dt / MAX_SUBSTEP) : 1;
       for (let i = 0; i < steps && this.state === 'play'; i++) this.update(dt / steps);
@@ -824,7 +985,9 @@ export class Game {
     springStep(this.dip, 0, 140, 11, dt);
     this.dip.x = Math.max(-0.3, this.dip.x);
     const p = this.player;
-    this.gun.animate(dt, p.onGround ? Math.hypot(p.vel.x, p.vel.z) : 0, this.dip.x);
+    // In VR the device is on the hand, which carries its own motion: no walk bob or landing dip.
+    if (this.vr.active) this.gun.animate(dt, 0, 0);
+    else this.gun.animate(dt, p.onGround ? Math.hypot(p.vel.x, p.vel.z) : 0, this.dip.x);
     this.hud.update(dt);
   }
 
@@ -855,6 +1018,16 @@ export class Game {
 
   private render(): void {
     const { renderer, scene, camera, portalCamera } = this.stage;
+    if (this.vr.active) {
+      // First VR pass: no views through portals (they show their dormant vortex)
+      // and no post-processing, which doesn't run inside an XR session.
+      if (renderer.shadowMap.enabled) renderer.shadowMap.needsUpdate = true;
+      this.portals.list[0].setOpen(false);
+      this.portals.list[1].setOpen(false);
+      this.vrPresent();
+      renderer.render(scene, camera);
+      return;
+    }
     camera.position.set(this.player.pos.x, this.player.pos.y + EYE_HEIGHT + this.dip.x, this.player.pos.z);
     camera.rotation.set(this.pitch, this.yaw, 0);
     camera.updateMatrixWorld();
