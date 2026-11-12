@@ -1,4 +1,5 @@
 import { isTouch, type PortalIndex } from './config';
+import { lookSettings } from './settings';
 import { $ } from './ui/dom';
 
 /** Game actions triggered by input. */
@@ -104,6 +105,12 @@ export class Input {
     }
   }
 
+  /** Applies the player's sensitivity multiplier and invert-Y before turning the camera. */
+  private look(dx: number, dy: number, base: number): void {
+    const { sensitivity, invertY } = lookSettings();
+    this.actions.look(dx, invertY ? -dy : dy, base * sensitivity);
+  }
+
   private bindKeyboard(): void {
     window.addEventListener('keydown', (e) => {
       this.keys.add(e.code);
@@ -147,14 +154,14 @@ export class Input {
     window.addEventListener('mousemove', (e) => {
       if (!actions.isPlaying()) return;
       if (this.locked) {
-        actions.look(e.movementX, e.movementY, MOUSE_LOCKED_SENS);
+        this.look(e.movementX, e.movementY, MOUSE_LOCKED_SENS);
       } else if (this.drag) {
         const dx = e.clientX - this.drag.x;
         const dy = e.clientY - this.drag.y;
         this.drag.x = e.clientX;
         this.drag.y = e.clientY;
         this.drag.moved += Math.abs(dx) + Math.abs(dy);
-        actions.look(dx, dy, MOUSE_DRAG_SENS);
+        this.look(dx, dy, MOUSE_DRAG_SENS);
       }
     });
     window.addEventListener('mouseup', () => {
@@ -200,7 +207,7 @@ export class Input {
           this.joystick.y = -dy / JOYSTICK_RADIUS;
           this.joyKnob.style.transform = `translate(${dx}px,${dy}px)`;
         } else if (t.identifier === this.lookId) {
-          this.actions.look(t.clientX - this.lookPos.x, t.clientY - this.lookPos.y, TOUCH_LOOK_SENS);
+          this.look(t.clientX - this.lookPos.x, t.clientY - this.lookPos.y, TOUCH_LOOK_SENS);
           this.lookPos = { x: t.clientX, y: t.clientY };
         }
       }

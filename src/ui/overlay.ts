@@ -1,4 +1,7 @@
 import { QUALITY, QUALITY_ORDER, type QualityName } from '../config';
+import {
+  SENSITIVITY_MAX, SENSITIVITY_MIN, SENSITIVITY_STEP, formatSensitivity, lookSettings, setLookSettings,
+} from '../settings';
 import { $ } from './dom';
 
 export interface CardAction {
@@ -72,6 +75,7 @@ export class Overlay {
       <p class="qnote">Higher settings look sharper but can lower the frame rate. The scene behind updates as you switch, so you can compare.</p>
       <div class="seg" role="radiogroup" aria-label="Graphics quality">${options}</div>
       <div class="qrow"><p id="qdesc"></p><p class="fps" id="fpsOut">– fps</p></div>
+      ${lookControlsHtml()}
       <button class="cta" id="go">${spec.closeLabel}</button>`;
     this.root.classList.add('peek');
     this.root.classList.remove('hidden');
@@ -107,6 +111,7 @@ export class Overlay {
       seg.querySelector<HTMLButtonElement>(`[data-q="${q}"]`)?.focus();
     });
     sync();
+    bindLookControls();
 
     const go = $('go');
     go.addEventListener('click', () => {
@@ -121,4 +126,24 @@ export class Overlay {
   setFps(fps: number): void {
     if (this.fpsEl) this.fpsEl.textContent = `${Math.round(fps)} fps`;
   }
+}
+
+function lookControlsHtml(): string {
+  const { sensitivity, invertY } = lookSettings();
+  return `<div class="look">
+      <div class="qrow"><label for="sensIn">Look sensitivity</label><output class="fps" id="sensOut" for="sensIn">${formatSensitivity(sensitivity)}</output></div>
+      <input type="range" id="sensIn" min="${SENSITIVITY_MIN}" max="${SENSITIVITY_MAX}" step="${SENSITIVITY_STEP}" value="${sensitivity}">
+      <label class="check"><input type="checkbox" id="invertY"${invertY ? ' checked' : ''}> Invert Y</label>
+    </div>`;
+}
+
+/** Wires the look controls; changes apply live and persist immediately. */
+function bindLookControls(): void {
+  const slider = $<HTMLInputElement>('sensIn');
+  const out = $('sensOut');
+  slider.addEventListener('input', () => {
+    out.textContent = formatSensitivity(setLookSettings({ sensitivity: Number(slider.value) }).sensitivity);
+  });
+  const invert = $<HTMLInputElement>('invertY');
+  invert.addEventListener('change', () => setLookSettings({ invertY: invert.checked }));
 }
