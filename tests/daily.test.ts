@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { dateForDay, dayNumber, formatTime } from '../src/daily/calendar';
-import { ARCHETYPES, archetypeFor, chamberName, dailyChamber, validate } from '../src/daily/generator';
+import { ARCHETYPES, archetypeFor, chamberName, dailyChamber, LEGACY_LAST_DAY, validate } from '../src/daily/generator';
 import { currentStreak, type Progress } from '../src/daily/progress';
 import { Frame } from '../src/world/frame';
 import { atGoal, createHarness, disposeHarness, simulate, towardGoal } from '../src/world/solver';
@@ -52,8 +52,12 @@ describe('daily chambers', () => {
   });
 
   it('uses every archetype', () => {
+    // Released days keep the original five; the full pool starts after the cutoff.
+    const legacy = new Set<string>();
+    for (let d = 1; d <= LEGACY_LAST_DAY; d++) legacy.add(archetypeFor(d).id);
+    expect(legacy.size).toBe(5);
     const seen = new Set<string>();
-    for (let d = 1; d <= 10; d++) seen.add(archetypeFor(d).id);
+    for (let d = LEGACY_LAST_DAY + 1; d <= LEGACY_LAST_DAY + 20; d++) seen.add(archetypeFor(d).id);
     expect(seen.size).toBe(ARCHETYPES.length);
   });
 
